@@ -143,6 +143,29 @@ class GridTest {
     }
 
     @Test
+    void riskSizingMakesEveryStoppedTradeLoseTheBudget() {
+        List<MinuteBar> bars = Bars.rivnOct15and16();
+        Set<LocalDate> days = Set.of(LocalDate.of(2026, 10, 16));
+        List<TradeSignal> signals = new SignalGenerator(Session.EXTENDED, 6).generate("RIVN", bars, days);
+
+        Grid.Result r = new Grid(new BracketSimulator(bars)).run("RIVN", signals,
+                List.of(0.08, 0.19, BracketSimulator.NONE), List.of(0.12, 0.25, BracketSimulator.NONE), 0.02, Sizing.risk(380, 2000));
+
+        assertEquals(4750, r.shares(0.08));                       // 380 / 0.08
+        assertEquals(2000, r.shares(0.19));
+        assertEquals(2000, r.shares(BracketSimulator.NONE));
+        // 8 cent stop, 12 cent target on 10/16: 11 targets, 1 stop, 0 held, now at 4,750 shares.
+        assertEquals(11 * 0.12 * 4750 - 0.08 * 4750, r.pnl()[0][0], 1e-6);
+        assertEquals(-380.0, r.cells()[0][0].worstTrade(), 1e-6);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Grid.print(r, new PrintStream(out, true, StandardCharsets.UTF_8));
+        String text = out.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("380 risked per trade (shares by stop: 0.08\u21924750 0.19\u21922000 none\u21922000)"), text);
+        assertTrue(text.contains("recommendation: stop 0.08, target 0.12, 4750 shares") || text.contains("recommendation: stop 0.19, target 0.25, 2000 shares")
+                || text.contains("recommendation: stop 0.08, target 0.25, 4750 shares") || text.contains("recommendation: stop 0.19, target 0.12, 2000 shares"), text);
+    }
+
+    @Test
     void defaultLevelsScaleWithTheMinuteRangeAndRoundToTicks() {
         assertEquals(List.of(0.03, 0.05, 0.06, 0.09, 0.12, 0.18, BracketSimulator.NONE), Grid.defaultLevels(Grid.STOP_MULTIPLES, 0.03));
         assertEquals(List.of(0.5, 0.75, 1.0, 1.5, 2.0, 3.0, BracketSimulator.NONE), Grid.defaultLevels(Grid.STOP_MULTIPLES, 0.5));

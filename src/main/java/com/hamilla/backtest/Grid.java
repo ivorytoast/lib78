@@ -44,8 +44,12 @@ public final class Grid {
     }
 
     public record Result(String symbol, List<Double> stops, List<Double> targets, double[][] pnl,
-                         BracketSimulator.Summary[][] cells, double typicalRange, int signals, int shares,
+                         BracketSimulator.Summary[][] cells, double typicalRange, int signals, Sizing sizing,
                          Recommendation recommendation, List<TimeBucket> byTime) {
+        /** Shares used for trades in the row with this stop. */
+        public int shares(double stop) {
+            return sizing.sharesFor(stop);
+        }
     }
 
     public record Recommendation(double stop, double target, BracketSimulator.Summary summary, double score) {
@@ -67,9 +71,12 @@ public final class Grid {
     /** Several months: per-month tables plus their aggregate. */
     public record MultiResult(String symbol, List<YearMonth> months, List<Double> stops, List<Double> targets,
                               BracketSimulator.Summary[][][] cells, double[][] total, double[][] worstMonth,
-                              int[][] monthsPositive, double typicalRange, int signals, int shares,
+                              int[][] monthsPositive, double typicalRange, int signals, Sizing sizing,
                               Recommendation recommendation, Map<YearMonth, Double> recommendedByMonth,
                               List<TimeBucket> byTime, List<CellDetail> shown) {
+        public int shares(double stop) {
+            return sizing.sharesFor(stop);
+        }
     }
 
     /** Everything about one stop-and-target pair, for a cell the user asked to see. */
@@ -124,22 +131,34 @@ public final class Grid {
 
     public Result run(String symbol, List<TradeSignal> signals, List<Double> stops, List<Double> targets,
                       double typicalRange, int shares) {
+        return run(symbol, signals, stops, targets, typicalRange, Sizing.shares(shares));
+    }
+
+    public Result run(String symbol, List<TradeSignal> signals, List<Double> stops, List<Double> targets,
+                      double typicalRange, Sizing sizing) {
         double[][] pnl = new double[stops.size()][targets.size()];
         BracketSimulator.Summary[][] cells = new BracketSimulator.Summary[stops.size()][targets.size()];
         for (int i = 0; i < stops.size(); i++) {
+            int shares = sizing.sharesFor(stops.get(i));
             for (int j = 0; j < targets.size(); j++) {
                 cells[i][j] = simulator.summarize(signals, stops.get(i), targets.get(j), shares);
                 pnl[i][j] = cells[i][j].pnl();
             }
         }
         Recommendation rec = recommend(stops, targets, pnl, (i, j) -> cells[i][j]);
-        List<TimeBucket> byTime = rec == null ? List.of() : byTime(simulator.simulate(signals, rec.stop(), rec.target(), shares), window);
-        return new Result(symbol, stops, targets, pnl, cells, typicalRange, signals.size(), shares, rec, byTime);
+        List<TimeBucket> byTime = rec == null ? List.of()
+                : byTime(simulator.simulate(signals, rec.stop(), rec.target(), sizing.sharesFor(rec.stop())), window);
+        return new Result(symbol, stops, targets, pnl, cells, typicalRange, signals.size(), sizing, rec, byTime);
     }
 
     public MultiResult runMonths(String symbol, Map<YearMonth, List<TradeSignal>> signalsByMonth, List<Double> stops,
                                  List<Double> targets, double typicalRange, int shares) {
-        return runMonths(symbol, signalsByMonth, stops, targets, typicalRange, shares, List.of());
+        return runMonths(symbol, signalsByMonth, stops, targets, typicalRange, Sizing.shares(shares), List.of());
+    }
+
+    public MultiResult runMonths(String symbol, Map<YearMonth, List<TradeSignal>> signalsByMonth, List<Double> stops,
+                                 List<Double> targets, double typicalRange, int shares, List<double[]> show) {
+        return runMonths(symbol, signalsByMonth, stops, targets, typicalRange, Sizing.shares(shares), show);
     }
 
     /**
@@ -147,7 +166,7 @@ public final class Grid {
      * counts. {@code show} names extra stop-and-target pairs whose detail is wanted regardless of the grid.
      */
     public MultiResult runMonths(String symbol, Map<YearMonth, List<TradeSignal>> signalsByMonth, List<Double> stops,
-                                 List<Double> targets, double typicalRange, int shares, List<double[]> show) {
+                                 List<Double> targets, double typicalRange, Sizing sizing, List<double[]> show) {
         List<YearMonth> months = new ArrayList<>(signalsByMonth.keySet());
         int rows = stops.size();
         int cols = targets.size();
@@ -161,6 +180,7 @@ public final class Grid {
             List<TradeSignal> signals = signalsByMonth.get(months.get(m));
             all.addAll(signals);
             for (int i = 0; i < rows; i++) {
+                int shares = sizing.sharesFor(stops.get(i));
                 for (int j = 0; j < cols; j++) {
                     cells[m][i][j] = simulator.summarize(signals, stops.get(i), targets.get(j), shares);
                 }
@@ -198,6 +218,7 @@ public final class Grid {
         }
         BracketSimulator.Summary[][] combined = new BracketSimulator.Summary[rows][cols];
         for (int i = 0; i < rows; i++) {
+            int shares = sizing.sharesFor(stops.get(i));
             for (int j = 0; j < cols; j++) {
                 combined[i][j] = simulator.summarize(all, stops.get(i), targets.get(j), shares);
             }
@@ -211,10 +232,11 @@ public final class Grid {
             for (int m = 0; m < months.size(); m++) {
                 recByMonth.put(months.get(m), cells[m][ri][rj].pnl());
             }
-            byTime = byTime(simulator.simulate(all, rec.stop(), rec.target(), shares), window);
+            byTime = byTime(simulator.simulate(all, rec.stop(), rec.target(), sizing.sharesFor(rec.stop())), window);
         }
         List<CellDetail> shown = new ArrayList<>();
         for (double[] pair : show) {
+            int shares = sizing.sharesFor(pair[0]);
             Map<YearMonth, Double> byMonth = new LinkedHashMap<>();
             for (YearMonth m : months) {
                 byMonth.put(m, simulator.summarize(signalsByMonth.get(m), pair[0], pair[1], shares).pnl());
@@ -223,7 +245,7 @@ public final class Grid {
                     byTime(simulator.simulate(all, pair[0], pair[1], shares), window)));
         }
         return new MultiResult(symbol, months, stops, targets, cells, total, worst, positive, typicalRange,
-                all.size(), shares, rec, recByMonth, byTime, shown);
+                all.size(), sizing, rec, recByMonth, byTime, shown);
     }
 
     interface CellLookup {
@@ -297,8 +319,8 @@ public final class Grid {
     }
 
     public static void print(Result r, PrintStream out) {
-        out.printf(Locale.US, "%s: %d signals, %d shares per trade, typical regular-hours minute range %s%n%n",
-                r.symbol(), r.signals(), r.shares(), money(r.typicalRange()));
+        out.printf(Locale.US, "%s: %d signals, %s, typical regular-hours minute range %s%n%n",
+                r.symbol(), r.signals(), sizingText(r.sizing(), r.stops()), money(r.typicalRange()));
         table(out, "total P&L", r.stops(), r.targets(), (i, j) -> String.format(Locale.US, "%,.0f", r.pnl()[i][j]));
 
         Recommendation rec = r.recommendation();
@@ -307,7 +329,7 @@ public final class Grid {
             return;
         }
         BracketSimulator.Summary s = rec.summary();
-        out.printf(Locale.US, "recommendation: stop %s, target %s%n", money(rec.stop()), money(rec.target()));
+        out.printf(Locale.US, "recommendation: stop %s, target %s, %d shares%n", money(rec.stop()), money(rec.target()), r.shares(rec.stop()));
         out.printf(Locale.US, "  P&L %,.2f over %d trades: %d targets, %d stops, %d held to 15:55; worst trade %,.2f%n",
                 s.pnl(), s.trades(), s.targets(), s.stops(), s.held(), s.worstTrade());
         out.printf(Locale.US, "  chosen for its neighbourhood: the surrounding cells average %,.0f, so it sits on a plateau, not a spike%n",
@@ -327,8 +349,8 @@ public final class Grid {
 
     public static void print(MultiResult r, PrintStream out) {
         int n = r.months().size();
-        out.printf(Locale.US, "%s %s to %s: %d months, %d signals, %d shares per trade, levels from typical minute range %s%n%n",
-                r.symbol(), r.months().get(0), r.months().get(n - 1), n, r.signals(), r.shares(), money(r.typicalRange()));
+        out.printf(Locale.US, "%s %s to %s: %d months, %d signals, %s, levels from typical minute range %s%n%n",
+                r.symbol(), r.months().get(0), r.months().get(n - 1), n, r.signals(), sizingText(r.sizing(), r.stops()), money(r.typicalRange()));
         table(out, "total P&L over all months", r.stops(), r.targets(), (i, j) -> String.format(Locale.US, "%,.0f", r.total()[i][j]));
         table(out, "worst month", r.stops(), r.targets(), (i, j) -> String.format(Locale.US, "%,.0f", r.worstMonth()[i][j]));
         table(out, "months positive (of " + n + ")", r.stops(), r.targets(), (i, j) -> Integer.toString(r.monthsPositive()[i][j]));
@@ -351,7 +373,7 @@ public final class Grid {
                             r.worstMonth()[c[0]][c[1]], r.monthsPositive()[c[0]][c[1]], n);
                 }
             } else {
-                out.printf(Locale.US, "recommendation: stop %s, target %s%n", money(rec.stop()), money(rec.target()));
+                out.printf(Locale.US, "recommendation: stop %s, target %s, %d shares%n", money(rec.stop()), money(rec.target()), r.shares(rec.stop()));
                 out.printf(Locale.US, "  total P&L %,.2f over %d trades: %d targets, %d stops, %d held to 15:55; worst trade %,.2f%n",
                         s.pnl(), s.trades(), s.targets(), s.stops(), s.held(), s.worstTrade());
                 out.printf(Locale.US, "  by month: %s%n", monthly(r.recommendedByMonth()));
@@ -365,7 +387,7 @@ public final class Grid {
         for (CellDetail d : r.shown()) {
             BracketSimulator.Summary s = d.summary();
             out.println();
-            out.printf(Locale.US, "detail: stop %s, target %s%n", level(d.stop()), level(d.target()));
+            out.printf(Locale.US, "detail: stop %s, target %s, %d shares%n", level(d.stop()), level(d.target()), r.shares(d.stop()));
             out.printf(Locale.US, "  total P&L %,.2f over %d trades: %d targets, %d stops, %d held to 15:55; worst trade %,.2f%n",
                     s.pnl(), s.trades(), s.targets(), s.stops(), s.held(), s.worstTrade());
             out.printf(Locale.US, "  by month: %s%n", monthly(d.byMonth()));
@@ -446,6 +468,18 @@ public final class Grid {
             out.println();
         }
         out.println();
+    }
+
+    /** "2000 shares per trade", or the risk budget and the share count it implies for each stop. */
+    static String sizingText(Sizing sizing, List<Double> stops) {
+        if (!sizing.byRisk()) {
+            return sizing.fixedShares() + " shares per trade";
+        }
+        StringBuilder sb = new StringBuilder(String.format(Locale.US, "%,.0f risked per trade (shares by stop:", sizing.riskDollars()));
+        for (double stop : stops) {
+            sb.append(' ').append(level(stop)).append('\u2192').append(sizing.sharesFor(stop));
+        }
+        return sb.append(')').toString();
     }
 
     static double bestDay(BracketSimulator.Summary s) {

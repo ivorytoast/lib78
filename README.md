@@ -188,6 +188,11 @@ three strongest totals instead. `--show 0.05,0.25` (repeatable) prints any
 pair's month-by-month P&L and time-of-day breakdown, whether or not the grid
 contains it.
 
+`--risk 380` sizes every trade as 380 divided by its stop distance instead of
+a fixed share count, so a stopped trade loses about $380 in every cell and the
+table compares brackets at equal risk; the header lists the share count each
+stop implies. Rows with no stop fall back to the fixed size.
+
 Options: `--shares N` (default: the symbol's configured size in
 `SymbolSettings`, else 100), `--stops 0.05,0.10,none` and
 `--targets 0.10,0.20,none` to test your own levels (defaults are multiples of

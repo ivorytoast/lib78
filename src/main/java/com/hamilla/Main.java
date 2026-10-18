@@ -59,6 +59,8 @@ public final class Main {
               --csv <path>  replay: write every close-updating trade and its SMA values to a CSV
                             file (with several tickers, the ticker is inserted before the extension)
               --shares <n>  grid: shares per trade (default: the symbol's configured size, else 100)
+              --risk <dollars>  grid: size each trade as risk divided by its stop, so a stopped trade
+                            loses about this much in every cell (no-stop rows use --shares)
               --stops <a,b,...>    grid: stop sizes in dollars to test ("none" allowed)
               --targets <a,b,...>  grid: target sizes in dollars to test ("none" allowed)
                             (defaults for both are multiples of the typical one-minute range)
@@ -223,6 +225,7 @@ public final class Main {
         }
         int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
         int shares = 0;
+        double risk = 0;
         List<Double> stops = null;
         List<Double> targets = null;
         List<double[]> show = new ArrayList<>();
@@ -231,6 +234,7 @@ public final class Main {
                 switch (args[i]) {
                     case "--cooldown" -> cooldown = Integer.parseInt(requireValue(args, ++i));
                     case "--shares" -> shares = Integer.parseInt(requireValue(args, ++i));
+                    case "--risk" -> risk = Double.parseDouble(requireValue(args, ++i));
                     case "--stops" -> stops = MonthGrid.parseLevels(requireValue(args, ++i));
                     case "--targets" -> targets = MonthGrid.parseLevels(requireValue(args, ++i));
                     case "--show" -> show.add(MonthGrid.parsePair(requireValue(args, ++i)));
@@ -240,8 +244,8 @@ public final class Main {
                     }
                 }
             }
-            if (cooldown < 0 || shares < 0) {
-                throw new IllegalArgumentException("cooldown and shares must not be negative");
+            if (cooldown < 0 || shares < 0 || risk < 0) {
+                throw new IllegalArgumentException("cooldown, shares and risk must not be negative");
             }
         } catch (IllegalArgumentException e) {
             System.err.println("error: " + e.getMessage());
@@ -249,7 +253,7 @@ public final class Main {
         }
         try {
             new MonthGrid(clientOrExit(), System.out).runAny(
-                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, window, cooldown, shares, stops, targets, show));
+                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, window, cooldown, shares, risk, stops, targets, show));
             return 0;
         } catch (IllegalArgumentException e) {
             System.err.println("error: " + e.getMessage());

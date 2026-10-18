@@ -75,7 +75,7 @@ class MonthGridTest {
                 List.of(0.08, 0.15), List.of(0.12, 0.40)));
 
         assertEquals(12, r.signals());
-        assertEquals(2000, r.shares());                       // RIVN's configured size
+        assertEquals(2000, r.sizing().fixedShares());          // RIVN's configured size
         assertEquals(2480.0, r.pnl()[0][0], 1e-6);
         String text = out.toString(StandardCharsets.UTF_8);
         assertTrue(text.contains("RIVN 2026-10: 1 trading days (2026-10-16 to 2026-10-16), 12 signals"), text);
@@ -99,8 +99,16 @@ class MonthGridTest {
         String text = out.toString(StandardCharsets.UTF_8);
         assertTrue(text.contains("RIVN 2026-09 to 2026-10: 1 trading days"), text);
         assertTrue(text.contains("months positive (of 2)"), text);
-        assertTrue(text.contains("detail: stop 0.05, target 0.25"), text);
+        assertTrue(text.contains("detail: stop 0.05, target 0.25, 2000 shares"), text);
         assertEquals(1, r.shown().size());
+
+        // The same range sized by risk: 380 / 0.05 = 7,600 shares on the 5 cent row.
+        out.reset();
+        MonthGrid.Outcome byRisk = grid.runAny(new MonthGrid.Options("RIVN", YearMonth.of(2026, 9), YearMonth.of(2026, 10),
+                Session.EXTENDED, com.hamilla.sma.SignalWindow.DEFAULT, 6, 0, 380, List.of(0.05, 0.08), List.of(0.12, 0.40), List.of()));
+        assertEquals(7600, byRisk.multi().shares(0.05));
+        assertEquals(4750, byRisk.multi().shares(0.08));
+        assertTrue(out.toString(StandardCharsets.UTF_8).contains("380 risked per trade"), out.toString(StandardCharsets.UTF_8));
         assertThrows(IllegalArgumentException.class, () -> new MonthGrid.Options("RIVN", YearMonth.of(2026, 10),
                 YearMonth.of(2026, 9), Session.EXTENDED, 6, 0, null, null));
     }

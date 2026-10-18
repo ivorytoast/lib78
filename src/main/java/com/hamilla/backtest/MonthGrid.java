@@ -35,11 +35,17 @@ public final class MonthGrid {
      * @param window    minutes whose closes may produce a signal
      * @param cooldown  signal cooldown in minutes
      * @param shares    shares per trade (0 means the symbol's configured default)
+     * @param risk      dollars risked per trade; when positive, shares are risk divided by the stop
      * @param stops     explicit stop levels, or null for defaults built from the typical minute range
      * @param targets   explicit target levels, or null for defaults
      */
     public record Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
-                          int cooldown, int shares, List<Double> stops, List<Double> targets, List<double[]> show) {
+                          int cooldown, int shares, double risk, List<Double> stops, List<Double> targets, List<double[]> show) {
+        public Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
+                       int cooldown, int shares, List<Double> stops, List<Double> targets, List<double[]> show) {
+            this(symbol, month, toMonth, session, window, cooldown, shares, 0, stops, targets, show);
+        }
+
         public Options(String symbol, YearMonth month, Session session, int cooldown, int shares,
                        List<Double> stops, List<Double> targets) {
             this(symbol, month, null, session, SignalWindow.DEFAULT, cooldown, shares, stops, targets, List.of());
@@ -167,10 +173,11 @@ public final class MonthGrid {
         List<Double> stops = opts.stops() != null ? opts.stops() : Grid.defaultLevels(Grid.STOP_MULTIPLES, range);
         List<Double> targets = opts.targets() != null ? opts.targets() : Grid.defaultLevels(Grid.TARGET_MULTIPLES, range);
         int shares = opts.shares() > 0 ? opts.shares() : SymbolSettings.shares(opts.symbol());
+        Sizing sizing = opts.risk() > 0 ? Sizing.risk(opts.risk(), shares) : Sizing.shares(shares);
         Grid grid = new Grid(new BracketSimulator(bars), opts.window());
 
         if (!opts.isRange()) {
-            Grid.Result result = grid.run(opts.symbol(), signals, stops, targets, range, shares);
+            Grid.Result result = grid.run(opts.symbol(), signals, stops, targets, range, sizing);
             Grid.print(result, out);
             return new Outcome(result, null);
         }
@@ -182,7 +189,7 @@ public final class MonthGrid {
         for (TradeSignal s : signals) {
             byMonth.get(YearMonth.from(s.date())).add(s);
         }
-        Grid.MultiResult result = grid.runMonths(opts.symbol(), byMonth, stops, targets, range, shares, opts.show());
+        Grid.MultiResult result = grid.runMonths(opts.symbol(), byMonth, stops, targets, range, sizing, opts.show());
         Grid.print(result, out);
         return new Outcome(null, result);
     }
