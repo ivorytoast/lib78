@@ -23,8 +23,8 @@ public final class Main {
             replay  Replays one past trading day trade by trade on one-minute bars. Directly after
                     each minute closes, from 09:45 through 15:59 Eastern, prints the minute when
                     there is an entry signal:
-                      BUY LONG    200 below 50, 50 below 20, price above the 20 by at most 2 cents
-                      SHORT SELL  200 above 50, 50 above 20, price below the 20 by at most 2 cents
+                      BUY LONG    200 below 50, 50 below 20 by 3+ cents, price above the 20 by at most 2 cents
+                      SHORT SELL  200 above 50, 50 above 20 by 3+ cents, price below the 20 by at most 2 cents
                     Nothing else is printed. Pre-market bars still feed the averages.
                     With no date, the most recent completed trading day is used.
             at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),

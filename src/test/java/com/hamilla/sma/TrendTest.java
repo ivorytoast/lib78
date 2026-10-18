@@ -29,6 +29,17 @@ class TrendTest {
     }
 
     @Test
+    void the20And50MustBeAtLeastThreeCentsApart() {
+        assertEquals(Trend.UP, Trend.of(snap(10.10, 10.00, 9.97, 9.50)));      // exactly three cents
+        assertEquals(Trend.NONE, Trend.of(snap(10.10, 10.00, 9.971, 9.50)));   // 2.9 cents
+        assertEquals(Trend.NONE, Trend.of(snap(10.10, 10.00, 9.99, 9.50)));
+        assertEquals(Trend.DOWN, Trend.of(snap(9.80, 9.90, 9.93, 10.50)));     // exactly three cents
+        assertEquals(Trend.NONE, Trend.of(snap(9.80, 9.90, 9.929, 10.50)));    // 2.9 cents
+        // Floating point: 10.00 and 9.97 differ by a hair under 0.03 in binary; the gap still counts.
+        assertEquals(Trend.UP, Trend.of(snap(10.10, 10.00, 10.00 - 0.03, 9.50)));
+    }
+
+    @Test
     void missingAveragesAreNone() {
         assertEquals(Trend.NONE, Trend.of(snap(10.10, 10.00, 9.90, Double.NaN)));
         assertEquals(Trend.NONE, Trend.of(snap(10.10, Double.NaN, Double.NaN, Double.NaN)));

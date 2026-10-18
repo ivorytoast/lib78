@@ -76,9 +76,9 @@ minute closes, from 09:45 through 15:59 Eastern, it classifies the minute:
 
 | zone | meaning |
 |---|---|
-| up   | 200 below 50, 50 below 20, and the price above the 20 |
-| down | 200 above 50, 50 above 20, and the price below the 20 |
-| none | anything else, ties included |
+| up   | 200 below 50, 50 below 20 by at least 3 cents, and the price above the 20 |
+| down | 200 above 50, 50 above 20 by at least 3 cents, and the price below the 20 |
+| none | anything else, ties and a 20 and 50 closer than 3 cents included |
 
 and prints the minute only when the zone gives an entry signal:
 
@@ -102,7 +102,7 @@ still feed the averages; they are just never printed.
 `expected/RIVN-2026-10-16.txt` holds the full expected output for that day,
 derived independently from every trade of the day, so
 `replay RIVN 2026-10-16 | diff - expected/RIVN-2026-10-16.txt`
-should print nothing. RIVN fell all day, so it has 104 `SHORT SELL` lines and
+should print nothing. RIVN fell all day, so it has 45 `SHORT SELL` lines and
 no `BUY LONG`.
 
 Options:
