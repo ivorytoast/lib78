@@ -169,7 +169,9 @@ public final class Grid {
             out.println("  this is a scalp: it needs a high win rate, and a strong move against it costs several wins");
         }
         double share = biggestDayShare(s);
-        if (share > 0.5) {
+        if (share > 1.0) {
+            out.printf(Locale.US, "  caution: the best day made %,.0f, more than the whole month; the other days net a loss%n", bestDay(s));
+        } else if (share > 0.5) {
             out.printf(Locale.US, "  caution: one day supplies %.0f%% of the P&L; validate on another month before trusting it%n", 100 * share);
         }
         if (s.trades() < 100) {
@@ -177,15 +179,16 @@ public final class Grid {
         }
     }
 
-    static double biggestDayShare(BracketSimulator.Summary s) {
-        if (s.pnl() <= 0) {
-            return 0;
-        }
+    static double bestDay(BracketSimulator.Summary s) {
         double max = 0;
         for (double v : s.pnlByDay().values()) {
             max = Math.max(max, v);
         }
-        return max / s.pnl();
+        return max;
+    }
+
+    static double biggestDayShare(BracketSimulator.Summary s) {
+        return s.pnl() <= 0 ? 0 : bestDay(s) / s.pnl();
     }
 
     private static String level(double v) {
