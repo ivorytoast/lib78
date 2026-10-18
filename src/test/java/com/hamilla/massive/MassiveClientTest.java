@@ -78,6 +78,33 @@ class MassiveClientTest {
     }
 
     @Test
+    void lastTradeAtOrBeforeAsksForOneNewestTradeUpToTheInstant() throws Exception {
+        List<String> queries = new ArrayList<>();
+        server.createContext("/v3/trades/QQQ", exchange -> {
+            queries.add(exchange.getRequestURI().getQuery());
+            byte[] bytes = "{\"results\":[{\"sip_timestamp\":1792167119761309656,\"price\":600.5,\"size\":7}]}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+        var at = java.time.Instant.ofEpochSecond(1792167120L, 5);
+        var trade = client().lastTradeAtOrBefore("QQQ", LocalDate.of(2026, 10, 16), at).orElseThrow();
+
+        assertEquals(600.5, trade.price());
+        assertEquals("QQQ", trade.symbol());
+        assertEquals("timestamp.gte=2026-10-16&timestamp.lte=1792167120000000005&order=desc&sort=timestamp&limit=1",
+                queries.get(0));
+    }
+
+    @Test
+    void lastTradeAtOrBeforeIsEmptyWhenNothingTraded() throws Exception {
+        respond("/v3/trades/IWM", 200, "{\"results\":[],\"status\":\"OK\"}");
+        assertTrue(client().lastTradeAtOrBefore("IWM", LocalDate.of(2026, 10, 10), java.time.Instant.EPOCH).isEmpty());
+    }
+
+    @Test
     void dailyBarsParsesRange() throws Exception {
         respond("/v2/aggs/ticker/SPY/range/1/day/2026-10-15/2026-10-16", 200, """
                 {"results":[

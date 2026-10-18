@@ -42,6 +42,26 @@ With no date the most recent completed trading day is replayed. The run
 
 The exit code is 0 when all three oracle checks pass.
 
+## Price and SMAs at one moment
+
+```
+java -jar target/lib78.jar at SPY 10/16/2026-12:12
+```
+
+prints the last trade at or before that minute (Eastern time) and the three
+averages as the engine stood on that trade:
+
+```
+SPY 10/16/2026-12:12 ET (last trade 12:11:59.761, 210 prior closes)
+Price: 767.28
+20: 771.39
+50: 768.58
+200: 725.03
+```
+
+Several tickers can be given with commas. A time with no trade yet, such as
+a weekend or before the 04:00 pre-market open, is reported as an error.
+
 ## Tests
 
 ```

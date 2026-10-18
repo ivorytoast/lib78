@@ -10,6 +10,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -76,6 +77,19 @@ public final class MassiveClient {
             }
             url = MassiveJson.nextUrl(page).orElse(null);
         }
+    }
+
+    /**
+     * The most recent trade for {@code ticker} on trading day {@code date} whose SIP timestamp is at or
+     * before {@code at}. Empty when there was no trade yet (before 04:00 Eastern, or not a trading day).
+     */
+    public Optional<PriceEvent> lastTradeAtOrBefore(String ticker, LocalDate date, Instant at)
+            throws IOException, InterruptedException {
+        long nanos = Math.addExact(Math.multiplyExact(at.getEpochSecond(), 1_000_000_000L), at.getNano());
+        String url = baseUrl + "/v3/trades/" + ticker + "?timestamp.gte=" + date + "&timestamp.lte=" + nanos
+                + "&order=desc&sort=timestamp&limit=1";
+        List<PriceEvent> trades = MassiveJson.trades(ticker, get(url));
+        return trades.isEmpty() ? Optional.empty() : Optional.of(trades.get(0));
     }
 
     /**
