@@ -5,8 +5,8 @@ import java.util.Deque;
 import java.util.List;
 
 /**
- * A simple moving average over {@code length} daily closes, where the most recent "close"
- * is whatever the price is right now. Holds the {@code length - 1} previous completed closes
+ * A simple moving average over {@code length} bar closes, where the most recent "close"
+ * is whatever the price is right now. Holds the {@code length - 1} previous completed bar closes
  * and their sum, so the live value for any price is one addition and one division.
  */
 public final class SmaWindow {
@@ -16,8 +16,8 @@ public final class SmaWindow {
     private double previousSum;
 
     /**
-     * @param length       number of days in the average, e.g. 20
-     * @param priorCloses  completed daily closes, oldest first. Only the last {@code length - 1} are kept.
+     * @param length       number of bars in the average, e.g. 20
+     * @param priorCloses  completed bar closes, oldest first. Only the last {@code length - 1} are kept.
      */
     public SmaWindow(int length, List<Double> priorCloses) {
         if (length < 1) {
@@ -35,12 +35,12 @@ public final class SmaWindow {
         return length;
     }
 
-    /** True once enough completed days are known to produce a full-length average. */
+    /** True once enough completed bars are known to produce a full-length average. */
     public boolean ready() {
         return previousCloses.size() == length - 1;
     }
 
-    /** The average as it stands if the current day were to close at {@code price}. NaN when not ready. */
+    /** The average as it stands if the forming bar were to close at {@code price}. NaN when not ready. */
     public double valueAt(double price) {
         if (!ready()) {
             return Double.NaN;
@@ -48,8 +48,8 @@ public final class SmaWindow {
         return (previousSum + price) / length;
     }
 
-    /** Rolls the window forward one day: {@code close} becomes the newest completed close. */
-    public void closeDay(double close) {
+    /** Rolls the window forward one bar: {@code close} becomes the newest completed close. */
+    public void closeBar(double close) {
         previousCloses.addLast(close);
         while (previousCloses.size() > length - 1) {
             previousCloses.removeFirst();

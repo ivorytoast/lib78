@@ -19,13 +19,13 @@ public final class Main {
             usage: lib78 replay <TICKER[,TICKER...]> [YYYY-MM-DD] [options]
                    lib78 at     <TICKER[,TICKER...]> <MM/DD/YYYY-HH:MM>
 
-            replay  Replays one past trading day trade by trade and reports the 20/50/200 day SMAs.
+            replay  Replays one past trading day trade by trade and reports the 20/50/200 minute-bar
+                    SMAs, checking every completed bar against Massive's own minute SMA values.
                     With no date, the most recent completed trading day is used.
-            at      Prints the price and the 20/50/200 day SMAs at one moment (Eastern time), using
-                    the last trade at or before that minute. Example: at SPY 10/16/2026-12:12
+            at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),
+                    using the last trade at or before that minute. Example: at SPY 10/16/2026-12:12
 
             replay options:
-              --regular-hours          only trades between 09:30 and 16:00 Eastern
               --print-every <minutes>  console line every N minutes (default 30, 0 = off)
               --csv <path>             write every trade and its SMA values to a CSV file
                                        (with several tickers, the ticker is inserted before the extension)
@@ -52,13 +52,11 @@ public final class Main {
             System.exit(at(symbols, args));
         }
         LocalDate date = null;
-        boolean regularHours = false;
         int printEvery = 30;
         Path csv = null;
 
         for (int i = 2; i < args.length; i++) {
             switch (args[i]) {
-                case "--regular-hours" -> regularHours = true;
                 case "--print-every" -> printEvery = Integer.parseInt(requireValue(args, ++i));
                 case "--csv" -> csv = Path.of(requireValue(args, ++i));
                 default -> {
@@ -79,7 +77,7 @@ public final class Main {
             LocalDate day = date != null ? date
                     : TradingCalendar.previousTradingDay(client, symbol, LocalDate.now(PriceEvent.EASTERN));
             Path csvFor = csvFor(csv, symbol, symbols.size() > 1);
-            Replay.Result result = replay.run(new Replay.Options(symbol, day, regularHours, printEvery, csvFor));
+            Replay.Result result = replay.run(new Replay.Options(symbol, day, printEvery, csvFor));
             allPass &= result.allOraclesPass();
             System.out.println();
         }

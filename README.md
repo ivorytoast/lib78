@@ -1,20 +1,33 @@
 # lib78
 
-Tracks the 20, 50 and 200 day simple moving averages of US equities and ETFs
-trade by trade, first by replaying a past day and later from the live feed.
-Market data comes from [Massive](https://massive.com).
+Tracks the 20, 50 and 200 period simple moving averages of one-minute bars for
+US equities and ETFs, trade by trade, first by replaying a past day and later
+from the live feed. Market data comes from [Massive](https://massive.com).
 
 ## How the averages are computed
 
-An N day SMA during the session is the average of the last N-1 completed daily
-closes and the current price. The engine loads those N-1 closes once, keeps
-their sum, and recomputes all three averages on every trade with one addition
-and one division each. Replay and live mode feed the same engine, so a replayed
-day reproduces what the live run would have shown.
+Each average is the mean of the last N one-minute bar closes, where the bar now
+forming closes at the latest price. The engine keeps the previous N-1 completed
+closes and their sum, so every trade updates all three averages with one
+addition and one division. When a trade arrives in a new minute, the previous
+bar is closed at its last price and rolled into the windows.
+
+The bars follow Massive's conventions, which were verified against its minute
+aggregates and its minute SMA endpoint:
+
+- Pre-market and after-hours bars count. A day runs 04:00 to 20:00 Eastern, and
+  the first bars of a day look back into the previous day.
+- Minutes with no trades produce no bar.
+- A trade only moves the close if its condition codes allow it. Odd lots,
+  average-price prints and similar are ignored, which is why a bar's close can
+  differ from the very last print in it. See `TradeConditions`.
+
+Replay and live mode feed the same engine, so a replayed day reproduces what
+the live run would have shown.
 
 ## Build
 
-Requires Java 21 and Maven. Gson is the only runtime dependency.
+Requires Java 21 or newer and Maven. Gson is the only runtime dependency.
 
 ```
 mvn package
@@ -22,45 +35,47 @@ mvn package
 
 produces `target/lib78.jar` with all dependencies included.
 
-## Stage one: replay a past day
-
-```
-export MASSIVE_API_KEY=...
-java -jar target/lib78.jar replay SPY 2026-10-16
-java -jar target/lib78.jar replay SPY,QQQ,IWM --regular-hours --print-every 15 --csv out.csv
-```
-
-With no date the most recent completed trading day is replayed. The run
-
-1. loads about 200 trading days of daily closes before the replay date,
-2. streams every trade of the day in time order (04:00 to 20:00 Eastern unless
-   `--regular-hours` is set) and updates the three averages per trade,
-3. prints a console line every `--print-every` minutes and, with `--csv`,
-   writes every trade and its SMA values to a file,
-4. checks the engine's value at the official close against Massive's own
-   `/v1/indicators/sma` endpoint for the same day and prints PASS or FAIL.
-
-The exit code is 0 when all three oracle checks pass.
-
 ## Price and SMAs at one moment
 
 ```
-java -jar target/lib78.jar at SPY 10/16/2026-12:12
+export MASSIVE_API_KEY=...
+java -jar target/lib78.jar at RIVN 10/16/2026-12:12
 ```
 
-prints the last trade at or before that minute (Eastern time) and the three
-averages as the engine stood on that trade:
+prints the last close-updating trade at or before that minute (Eastern time)
+and the three averages as the engine stood on that trade:
 
 ```
-SPY 10/16/2026-12:12 ET (last trade 12:11:59.761, 210 prior closes)
-Price: 767.28
-20: 771.39
-50: 768.58
-200: 725.03
+RIVN 10/16/2026-12:12 ET (last trade 12:11:56.830, 200 prior bars)
+Price: 12.69
+20: 12.71
+50: 12.75
+200: 12.94
 ```
 
 Several tickers can be given with commas. A time with no trade yet, such as
 a weekend or before the 04:00 pre-market open, is reported as an error.
+
+## Replay a past day
+
+```
+java -jar target/lib78.jar replay RIVN 2026-10-16
+java -jar target/lib78.jar replay SPY,QQQ,IWM --print-every 15 --csv out.csv
+```
+
+With no date the most recent completed trading day is replayed. The run
+
+1. loads the previous week of minute bars so the 200 bar window is full from
+   the first trade,
+2. streams every trade of the day in time order and updates the averages on
+   each close-updating trade,
+3. prints a console line every `--print-every` minutes and, with `--csv`,
+   writes every applied trade and its SMA values to a file,
+4. checks the engine's value at every completed bar against Massive's own
+   `/v1/indicators/sma` minute values and prints, per window, how many bars
+   matched, the largest difference, and the first few mismatches.
+
+The exit code is 0 when every bar matches for all three windows.
 
 ## Tests
 
@@ -68,7 +83,9 @@ a weekend or before the 04:00 pre-market open, is reported as an error.
 mvn test
 ```
 
-The engine is tested against real SPY data: the daily closes in
-`src/test/resources/spy-daily.csv` and the SMA values Massive reported for
-2026-10-16. The HTTP client is tested against a local server for pagination,
-authentication and retry behaviour.
+The engine is tested against real RIVN data: the 200 one-minute closes ending
+at the 12:11 bar on 2026-10-16 in `src/test/resources/rivn-minute-2026-10-16.csv`
+and the SMA values Massive reported for that bar. The trade-condition rule is
+tested against the trades and bars Massive returned for the same day. The HTTP
+client is tested against a local server for pagination, authentication and
+retry behaviour.

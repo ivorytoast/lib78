@@ -1,6 +1,6 @@
 package com.hamilla.massive;
 
-import com.hamilla.market.DailyBar;
+import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -12,13 +12,15 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.OptionalDouble;
+import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Drives the client against a local HTTP server to cover pagination, auth headers and retries. */
@@ -27,6 +29,7 @@ class MassiveClientTest {
     private HttpServer server;
     private String baseUrl;
     private final List<String> authHeaders = new ArrayList<>();
+    private final List<String> queries = new ArrayList<>();
 
     @BeforeEach
     void start() throws IOException {
@@ -47,6 +50,7 @@ class MassiveClientTest {
     private void respond(String path, int status, String body) {
         server.createContext(path, exchange -> {
             authHeaders.add(exchange.getRequestHeaders().getFirst("Authorization"));
+            queries.add(exchange.getRequestURI().getQuery());
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status, bytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
@@ -57,11 +61,10 @@ class MassiveClientTest {
 
     @Test
     void tradesFollowsNextUrlAcrossPagesInOrder() throws Exception {
-        // Page one lives at the real path; page two is wherever next_url points, as Massive does it.
         respond("/v3/trades/SPY", 200, """
                 {"results":[
                   {"sip_timestamp":1000,"price":1.0,"size":1},
-                  {"sip_timestamp":2000,"price":2.0,"size":1}
+                  {"sip_timestamp":2000,"price":2.0,"size":1,"conditions":[37]}
                 ],"next_url":"%s/page2"}
                 """.formatted(baseUrl));
         respond("/page2", 200, """
@@ -72,61 +75,65 @@ class MassiveClientTest {
         client().trades("SPY", LocalDate.of(2026, 10, 16), got::add);
 
         assertEquals(List.of(1000L, 2000L, 3000L), got.stream().map(PriceEvent::sipTimestampNanos).toList());
-        assertEquals(5.0, got.get(2).size());
+        assertEquals(List.of(37), got.get(1).conditions());
         assertEquals(2, authHeaders.size());
         assertTrue(authHeaders.stream().allMatch("Bearer test-key"::equals), "every request must carry the key");
     }
 
     @Test
-    void lastTradeAtOrBeforeAsksForOneNewestTradeUpToTheInstant() throws Exception {
-        List<String> queries = new ArrayList<>();
-        server.createContext("/v3/trades/QQQ", exchange -> {
-            queries.add(exchange.getRequestURI().getQuery());
-            byte[] bytes = "{\"results\":[{\"sip_timestamp\":1792167119761309656,\"price\":600.5,\"size\":7}]}"
-                    .getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(200, bytes.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(bytes);
-            }
-        });
-        var at = java.time.Instant.ofEpochSecond(1792167120L, 5);
-        var trade = client().lastTradeAtOrBefore("QQQ", LocalDate.of(2026, 10, 16), at).orElseThrow();
+    void minuteBarsFollowsPaginationAndAsksForTheWholeRange() throws Exception {
+        respond("/v2/aggs/ticker/RIVN/range/1/minute/2026-10-09/2026-10-16", 200, """
+                {"results":[{"o":1,"h":1,"l":1,"c":1.5,"t":1792137600000,"v":10}],"next_url":"%s/bars2"}
+                """.formatted(baseUrl));
+        respond("/bars2", 200, """
+                {"results":[{"o":2,"h":2,"l":2,"c":2.5,"t":1792137660000}]}
+                """);
+        List<MinuteBar> bars = client().minuteBars("RIVN", LocalDate.of(2026, 10, 9), LocalDate.of(2026, 10, 16));
+        assertEquals(2, bars.size());
+        assertEquals(2.5, bars.get(1).close());
+        assertEquals("adjusted=true&sort=asc&limit=50000", queries.get(0));
+    }
 
-        assertEquals(600.5, trade.price());
-        assertEquals("QQQ", trade.symbol());
-        assertEquals("timestamp.gte=2026-10-16&timestamp.lte=1792167120000000005&order=desc&sort=timestamp&limit=1",
+    @Test
+    void lastUpdatingTradeSkipsOddLotsAcrossPages() throws Exception {
+        respond("/v3/trades/RIVN", 200, """
+                {"results":[
+                  {"sip_timestamp":1792167119603049308,"price":12.685,"size":37,"conditions":[37]},
+                  {"sip_timestamp":1792167118791007967,"price":12.6898,"size":7,"conditions":[37]}
+                ],"next_url":"%s/older"}
+                """.formatted(baseUrl));
+        respond("/older", 200, """
+                {"results":[{"sip_timestamp":1792167116830639117,"price":12.69,"size":400}]}
+                """);
+        var at = Instant.ofEpochSecond(1792167120L);
+        PriceEvent trade = client().lastUpdatingTradeAtOrBefore("RIVN", LocalDate.of(2026, 10, 16), at).orElseThrow();
+
+        assertEquals(12.69, trade.price());
+        assertEquals(1792167116830639117L, trade.sipTimestampNanos());
+        assertEquals("timestamp.gte=2026-10-16&timestamp.lte=1792167120000000000&order=desc&sort=timestamp&limit=200",
                 queries.get(0));
     }
 
     @Test
-    void lastTradeAtOrBeforeIsEmptyWhenNothingTraded() throws Exception {
-        respond("/v3/trades/IWM", 200, "{\"results\":[],\"status\":\"OK\"}");
-        assertTrue(client().lastTradeAtOrBefore("IWM", LocalDate.of(2026, 10, 10), java.time.Instant.EPOCH).isEmpty());
+    void lastUpdatingTradeIsEmptyWhenNothingQualifies() throws Exception {
+        respond("/v3/trades/IWM", 200, "{\"results\":[{\"sip_timestamp\":5,\"price\":1,\"size\":1,\"conditions\":[37]}]}");
+        assertTrue(client().lastUpdatingTradeAtOrBefore("IWM", LocalDate.of(2026, 10, 10), Instant.EPOCH).isEmpty());
     }
 
     @Test
-    void dailyBarsParsesRange() throws Exception {
-        respond("/v2/aggs/ticker/SPY/range/1/day/2026-10-15/2026-10-16", 200, """
-                {"results":[
-                  {"o":766.25,"c":771.79,"h":772.87,"l":764.43,"t":1792036800000,"v":1},
-                  {"o":773.24,"c":763.25,"h":773.25,"l":760.64,"t":1792123200000,"v":2}
-                ]}
+    void minuteSmaCoversTheEasternDayAndFollowsPagination() throws Exception {
+        respond("/v1/indicators/sma/RIVN", 200, """
+                {"results":{"values":[{"timestamp":1792137600000,"value":13.1}]},"next_url":"%s/sma2"}
+                """.formatted(baseUrl));
+        respond("/sma2", 200, """
+                {"results":{"values":[{"timestamp":1792137660000,"value":13.2}]}}
                 """);
-        List<DailyBar> bars = client().dailyBars("SPY", LocalDate.of(2026, 10, 15), LocalDate.of(2026, 10, 16));
-        assertEquals(2, bars.size());
-        assertEquals(LocalDate.of(2026, 10, 16), bars.get(1).date());
-    }
-
-    @Test
-    void smaReturnsEmptyWhenMassiveAnswersForADifferentDay() throws Exception {
-        // Asking for a Saturday: Massive returns the latest value at or before it, which is Friday's.
-        respond("/v1/indicators/sma/SPY", 200, """
-                {"results":{"values":[{"timestamp":1792123200000,"value":771.184}]}}
-                """);
-        OptionalDouble friday = client().sma("SPY", 20, LocalDate.of(2026, 10, 16));
-        OptionalDouble saturday = client().sma("SPY", 20, LocalDate.of(2026, 10, 17));
-        assertEquals(771.184, friday.orElseThrow());
-        assertTrue(saturday.isEmpty());
+        TreeMap<Long, Double> values = client().minuteSma("RIVN", 20, LocalDate.of(2026, 10, 16));
+        assertEquals(2, values.size());
+        assertEquals(13.2, values.get(1792137660000L));
+        // 2026-10-16 00:00 ET is 04:00 UTC = 1792123200000; the next midnight is 1792209600000.
+        assertEquals("timespan=minute&adjusted=true&window=20&series_type=close&timestamp.gte=1792123200000"
+                + "&timestamp.lt=1792209600000&order=asc&limit=5000", queries.get(0));
     }
 
     @Test
@@ -142,7 +149,7 @@ class MassiveClientTest {
                 os.write(bytes);
             }
         });
-        List<DailyBar> bars = client().dailyBars("QQQ", LocalDate.of(2026, 10, 16), LocalDate.of(2026, 10, 16));
+        var bars = client().dailyBars("QQQ", LocalDate.of(2026, 10, 16), LocalDate.of(2026, 10, 16));
         assertEquals(2, calls.get());
         assertEquals(2.0, bars.get(0).close());
     }
@@ -158,7 +165,7 @@ class MassiveClientTest {
                 os.write(bytes);
             }
         });
-        IOException e = org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+        IOException e = assertThrows(IOException.class,
                 () -> client().dailyBars("BAD", LocalDate.of(2026, 10, 16), LocalDate.of(2026, 10, 16)));
         assertTrue(e.getMessage().contains("HTTP 403"));
         assertEquals(1, calls.get());

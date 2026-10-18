@@ -4,7 +4,11 @@ import com.hamilla.market.PriceEvent;
 
 import java.util.List;
 
-/** The 20, 50 and 200 day simple moving averages for one symbol, updated on every price. */
+/**
+ * The 20, 50 and 200 bar simple moving averages for one symbol, updated on every price.
+ * The bars are one-minute bars: each average is the mean of the previous N-1 completed
+ * bar closes and the current price. {@link #closeBar} rolls the window when a bar completes.
+ */
 public final class MovingAverages {
 
     public static final int[] WINDOWS = {20, 50, 200};
@@ -16,8 +20,8 @@ public final class MovingAverages {
 
     /**
      * @param symbol      ticker this engine tracks
-     * @param priorCloses completed daily closes, oldest first, not including today. At least 199
-     *                    are needed for the 200 day average to be available.
+     * @param priorCloses completed bar closes, oldest first, not including the bar now forming.
+     *                    At least 199 are needed for the 200 bar average to be available.
      */
     public MovingAverages(String symbol, List<Double> priorCloses) {
         this.symbol = symbol;
@@ -30,7 +34,7 @@ public final class MovingAverages {
         return symbol;
     }
 
-    /** Computes the averages as of {@code event}. Does not change any state; days roll via {@link #closeDay}. */
+    /** Computes the averages as of {@code event}. Does not change any state; bars roll via {@link #closeBar}. */
     public SmaSnapshot update(PriceEvent event) {
         if (!event.symbol().equals(symbol)) {
             throw new IllegalArgumentException("engine for " + symbol + " received " + event.symbol());
@@ -38,17 +42,17 @@ public final class MovingAverages {
         return snapshotAt(event.sipTimestampNanos(), event.price());
     }
 
-    /** The averages if the current day closed at {@code price}. */
+    /** The averages if the forming bar closed at {@code price}. */
     public SmaSnapshot snapshotAt(long sipTimestampNanos, double price) {
         return new SmaSnapshot(symbol, sipTimestampNanos, price,
                 sma20.valueAt(price), sma50.valueAt(price), sma200.valueAt(price));
     }
 
-    /** Call once the trading day is over with its official close, so tomorrow's values use it. */
-    public void closeDay(double close) {
-        sma20.closeDay(close);
-        sma50.closeDay(close);
-        sma200.closeDay(close);
+    /** Call when a bar completes with its close, so the next bar's values include it. */
+    public void closeBar(double close) {
+        sma20.closeBar(close);
+        sma50.closeBar(close);
+        sma200.closeBar(close);
     }
 
     public boolean ready(int window) {

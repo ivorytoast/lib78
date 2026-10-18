@@ -5,14 +5,16 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.hamilla.market.DailyBar;
+import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalDouble;
 
 /** Pure functions that turn Massive's JSON responses into our records. Kept separate so they are testable offline. */
 public final class MassiveJson {
@@ -50,45 +52,58 @@ public final class MassiveJson {
         return bars;
     }
 
+    /** Results of {@code /v2/aggs/ticker/{t}/range/1/minute/...}. */
+    public static List<MinuteBar> minuteBars(JsonObject response) {
+        List<MinuteBar> bars = new ArrayList<>();
+        for (JsonElement e : resultsArray(response)) {
+            JsonObject o = e.getAsJsonObject();
+            bars.add(new MinuteBar(o.get("t").getAsLong(),
+                    o.get("o").getAsDouble(),
+                    o.get("h").getAsDouble(),
+                    o.get("l").getAsDouble(),
+                    o.get("c").getAsDouble(),
+                    o.has("v") ? o.get("v").getAsDouble() : 0.0));
+        }
+        return bars;
+    }
+
     /** Results of {@code /v3/trades/{t}}. */
     public static List<PriceEvent> trades(String symbol, JsonObject response) {
         List<PriceEvent> events = new ArrayList<>();
         for (JsonElement e : resultsArray(response)) {
             JsonObject o = e.getAsJsonObject();
+            List<Integer> conditions = new ArrayList<>();
+            JsonElement c = o.get("conditions");
+            if (c != null && c.isJsonArray()) {
+                for (JsonElement id : c.getAsJsonArray()) {
+                    conditions.add(id.getAsInt());
+                }
+            }
             events.add(new PriceEvent(symbol,
                     o.get("sip_timestamp").getAsLong(),
                     o.get("price").getAsDouble(),
-                    o.has("size") ? o.get("size").getAsDouble() : 0.0));
+                    o.has("size") ? o.get("size").getAsDouble() : 0.0,
+                    conditions));
         }
         return events;
     }
 
-    /** The single value from {@code /v1/indicators/sma/{t}} when queried with limit=1. */
-    public static OptionalDouble smaValue(JsonObject response) {
+    /** All values from {@code /v1/indicators/sma/{t}}, keyed by the timestamp of the bar each belongs to, in response order. */
+    public static Map<Long, Double> smaValues(JsonObject response) {
+        Map<Long, Double> values = new LinkedHashMap<>();
         JsonElement results = response.get("results");
         if (results == null || !results.isJsonObject()) {
-            return OptionalDouble.empty();
+            return values;
         }
-        JsonElement values = results.getAsJsonObject().get("values");
-        if (values == null || !values.isJsonArray() || values.getAsJsonArray().isEmpty()) {
-            return OptionalDouble.empty();
+        JsonElement array = results.getAsJsonObject().get("values");
+        if (array == null || !array.isJsonArray()) {
+            return values;
         }
-        JsonObject first = values.getAsJsonArray().get(0).getAsJsonObject();
-        return OptionalDouble.of(first.get("value").getAsDouble());
-    }
-
-    /** Timestamp (ms) of the aggregate the SMA value belongs to, so callers can confirm it is the day they asked for. */
-    public static Optional<LocalDate> smaDate(JsonObject response) {
-        JsonElement results = response.get("results");
-        if (results == null || !results.isJsonObject()) {
-            return Optional.empty();
+        for (JsonElement e : array.getAsJsonArray()) {
+            JsonObject o = e.getAsJsonObject();
+            values.put(o.get("timestamp").getAsLong(), o.get("value").getAsDouble());
         }
-        JsonElement values = results.getAsJsonObject().get("values");
-        if (values == null || !values.isJsonArray() || values.getAsJsonArray().isEmpty()) {
-            return Optional.empty();
-        }
-        long ms = values.getAsJsonArray().get(0).getAsJsonObject().get("timestamp").getAsLong();
-        return Optional.of(Instant.ofEpochMilli(ms).atZone(PriceEvent.EASTERN).toLocalDate());
+        return values;
     }
 
     private static JsonArray resultsArray(JsonObject response) {

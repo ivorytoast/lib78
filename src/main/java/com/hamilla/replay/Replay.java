@@ -1,9 +1,11 @@
 package com.hamilla.replay;
 
-import com.hamilla.market.DailyBar;
+import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
+import com.hamilla.sma.MinuteBarTracker;
 import com.hamilla.sma.MovingAverages;
+import com.hamilla.sma.SessionMinutes;
 import com.hamilla.sma.SmaSnapshot;
 
 import java.io.IOException;
@@ -12,50 +14,57 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.OptionalDouble;
+import java.util.TreeMap;
 
 /**
  * Stage one: run one past trading day for one symbol, trade by trade, and report how the
- * 20/50/200 day SMAs moved. At the end, the engine's value using the official close is checked
- * against Massive's own SMA endpoint for the same day.
+ * 20/50/200 minute-bar SMAs moved. Every completed bar's values are checked against Massive's
+ * own minute SMA endpoint for the same bar, which is the correctness test for the engine.
  */
 public final class Replay {
 
-    /** Trading days of history to request. 200 trading days is about 290 calendar days; this leaves margin for holidays. */
-    private static final int WARMUP_CALENDAR_DAYS = 330;
+    /** Calendar days of minute bars to load before the replay day; 199 bars is well under one session. */
+    private static final int WARMUP_CALENDAR_DAYS = 7;
     private static final int LARGEST_WINDOW = 200;
     private static final double ORACLE_TOLERANCE = 1e-6;
-    private static final LocalTime REGULAR_OPEN = LocalTime.of(9, 30);
-    private static final LocalTime REGULAR_CLOSE = LocalTime.of(16, 0);
+    private static final int MISMATCH_EXAMPLES = 5;
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+    private static final DateTimeFormatter BAR_TIME = DateTimeFormatter.ofPattern("HH:mm");
 
     /**
      * @param symbol            ticker to replay
      * @param date              trading day to replay
-     * @param regularHoursOnly  drop trades outside 09:30 to 16:00 Eastern
      * @param printEveryMinutes print a line to the console on each N minute boundary (0 disables)
-     * @param csvOut            optional path to write one row per trade
+     * @param csvOut            optional path to write one row per updating trade
      */
-    public record Options(String symbol, LocalDate date, boolean regularHoursOnly, int printEveryMinutes, Path csvOut) {
+    public record Options(String symbol, LocalDate date, int printEveryMinutes, Path csvOut) {
     }
 
-    /** What the replay found, for callers that want to inspect rather than read the console. */
-    public record Result(String symbol, LocalDate date, long trades, SmaSnapshot first, SmaSnapshot last,
-                         DailyBar officialBar, List<OracleCheck> oracleChecks) {
-        public boolean allOraclesPass() {
-            return oracleChecks.stream().allMatch(OracleCheck::pass);
+    /** One bar where the engine and Massive disagree. */
+    public record Mismatch(long barStartMs, double engine, double massive) {
+    }
+
+    /** How one window's values compared with Massive's, bar by bar. */
+    public record OracleCheck(int window, int barsCompared, int barsMatched, double maxAbsDiff,
+                              int barsMissingFromMassive, int barsMissingFromEngine, List<Mismatch> examples) {
+        public boolean pass() {
+            return barsCompared > 0 && barsMatched == barsCompared && barsMissingFromEngine == 0;
         }
     }
 
-    /** Engine value using the official close versus Massive's SMA endpoint for the same window and day. */
-    public record OracleCheck(int window, double engine, OptionalDouble massive, boolean pass) {
+    /** What the replay found, for callers that want to inspect rather than read the console. */
+    public record Result(String symbol, LocalDate date, long tradesSeen, long tradesApplied, long barsClosed,
+                         long barsFilled, SmaSnapshot first, SmaSnapshot last, List<OracleCheck> oracleChecks) {
+        public boolean allOraclesPass() {
+            return oracleChecks.stream().allMatch(OracleCheck::pass);
+        }
     }
 
     private final MassiveClient client;
@@ -70,67 +79,75 @@ public final class Replay {
         String symbol = opts.symbol();
         LocalDate date = opts.date();
 
-        List<DailyBar> history = client.dailyBars(symbol, date.minusDays(WARMUP_CALENDAR_DAYS), date.minusDays(1));
-        List<Double> closes = new ArrayList<>(history.size());
-        for (DailyBar bar : history) {
-            closes.add(bar.close());
-        }
-        out.printf("%s %s: %d prior daily closes loaded (%s to %s)%n", symbol, date, closes.size(),
-                history.isEmpty() ? "-" : history.get(0).date(),
-                history.isEmpty() ? "-" : history.get(history.size() - 1).date());
+        List<MinuteBar> history = client.minuteBars(symbol, date.minusDays(WARMUP_CALENDAR_DAYS), date.minusDays(1));
+        List<Double> closes = history.isEmpty() ? List.of()
+                : SessionMinutes.fillCloses(history, SessionMinutes.lastBarOfSession(history.get(history.size() - 1).startMs()));
+        out.printf("%s %s: %d prior minute bars loaded, %d session minutes after filling (%s to %s)%n",
+                symbol, date, history.size(), closes.size(),
+                history.isEmpty() ? "-" : barTime(history.get(0).startMs()),
+                history.isEmpty() ? "-" : barTime(history.get(history.size() - 1).startMs()));
         if (closes.size() < LARGEST_WINDOW - 1) {
-            out.printf("warning: only %d closes, the 200 day SMA will be unavailable%n", closes.size());
+            out.printf("warning: only %d bars, the 200 bar SMA will be unavailable at first%n", closes.size());
         }
 
-        List<DailyBar> dayBars = client.dailyBars(symbol, date, date);
-        if (dayBars.isEmpty()) {
-            throw new IOException("Massive has no daily bar for " + symbol + " on " + date + "; was it a trading day?");
+        List<TreeMap<Long, Double>> massive = new ArrayList<>();
+        for (int window : MovingAverages.WINDOWS) {
+            massive.add(client.minuteSma(symbol, window, date));
         }
-        DailyBar officialBar = dayBars.get(0);
 
         MovingAverages engine = new MovingAverages(symbol, closes);
-        Collector collector = new Collector(opts, engine);
+        Collector collector = new Collector(opts, engine, massive);
+        if (!history.isEmpty()) {
+            MinuteBar lastBar = history.get(history.size() - 1);
+            collector.tracker.seed(SessionMinutes.lastBarOfSession(lastBar.startMs()), lastBar.close());
+        }
         try (collector) {
             new ReplaySource(client, symbol, date).stream(collector::accept);
+            collector.tracker.finishSession();
         }
 
-        if (collector.count == 0) {
+        if (collector.applied == 0) {
             throw new IOException("no trades returned for " + symbol + " on " + date);
         }
 
         List<OracleCheck> checks = new ArrayList<>();
-        SmaSnapshot atClose = engine.snapshotAt(collector.last.sipTimestampNanos(), officialBar.close());
-        for (int window : MovingAverages.WINDOWS) {
-            double engineValue = switch (window) {
-                case 20 -> atClose.sma20();
-                case 50 -> atClose.sma50();
-                default -> atClose.sma200();
-            };
-            OptionalDouble massive = engine.ready(window) ? client.sma(symbol, window, date) : OptionalDouble.empty();
-            boolean pass = massive.isPresent() && Math.abs(massive.getAsDouble() - engineValue) <= ORACLE_TOLERANCE;
-            checks.add(new OracleCheck(window, engineValue, massive, pass));
+        for (int i = 0; i < MovingAverages.WINDOWS.length; i++) {
+            int missingFromEngine = 0;
+            for (long t : massive.get(i).keySet()) {
+                if (!collector.engineBars.contains(t)) {
+                    missingFromEngine++;
+                }
+            }
+            checks.add(new OracleCheck(MovingAverages.WINDOWS[i], collector.compared[i], collector.matched[i],
+                    collector.maxDiff[i], collector.missingFromMassive[i], missingFromEngine, collector.examples.get(i)));
         }
 
-        Result result = new Result(symbol, date, collector.count, collector.first, collector.last, officialBar, checks);
+        Result result = new Result(symbol, date, collector.seen, collector.applied, collector.tracker.barsClosed(),
+                collector.tracker.barsFilled(), collector.first, collector.tracker.lastSnapshot(), checks);
         printSummary(result);
         return result;
     }
 
     private void printSummary(Result r) {
         out.println();
-        out.printf("%s %s: %,d trades replayed%n", r.symbol(), r.date(), r.trades());
+        out.printf("%s %s: %,d trades seen, %,d applied to bars, %,d bars closed (%,d of them repeated an empty minute)%n",
+                r.symbol(), r.date(), r.tradesSeen(), r.tradesApplied(), r.barsClosed(), r.barsFilled());
         out.printf("  first %s  %s%n", time(r.first()), smas(r.first()));
         out.printf("  last  %s  %s%n", time(r.last()), smas(r.last()));
-        out.printf("  official bar: o=%.4f h=%.4f l=%.4f c=%.4f%n",
-                r.officialBar().open(), r.officialBar().high(), r.officialBar().low(), r.officialBar().close());
-        out.println("  oracle check (engine at official close vs Massive SMA endpoint):");
+        out.println("  oracle check (engine at each bar close vs Massive minute SMA):");
         for (OracleCheck c : r.oracleChecks()) {
-            String massive = c.massive().isPresent() ? String.format(Locale.US, "%.6f", c.massive().getAsDouble()) : "n/a";
-            String diff = c.massive().isPresent()
-                    ? String.format(Locale.US, "%+.9f", c.engine() - c.massive().getAsDouble()) : "";
-            out.printf("    sma%-3d engine=%-14.6f massive=%-14s %s %s%n",
-                    c.window(), c.engine(), massive, c.pass() ? "PASS" : "FAIL", diff);
+            out.printf("    sma%-3d %4d/%-4d bars match, max diff %.9f, %d bars Massive lacks, %d bars engine lacks  %s%n",
+                    c.window(), c.barsMatched(), c.barsCompared(), c.maxAbsDiff(),
+                    c.barsMissingFromMassive(), c.barsMissingFromEngine(), c.pass() ? "PASS" : "FAIL");
+            for (Mismatch m : c.examples()) {
+                out.printf("      %s engine=%.6f massive=%.6f diff=%+.6f%n",
+                        barTime(m.barStartMs()), m.engine(), m.massive(), m.engine() - m.massive());
+            }
         }
+    }
+
+    private static String barTime(long startMs) {
+        return Instant.ofEpochMilli(startMs).atZone(PriceEvent.EASTERN).format(BAR_TIME);
     }
 
     private static String time(SmaSnapshot s) {
@@ -142,19 +159,30 @@ public final class Replay {
                 s.price(), s.sma20(), s.sma50(), s.sma200());
     }
 
-    /** Feeds trades to the engine, prints at minute boundaries, and optionally writes a CSV. */
-    private final class Collector implements AutoCloseable {
+    /** Feeds trades to the tracker, checks each closed bar against Massive, prints, and optionally writes a CSV. */
+    private final class Collector implements AutoCloseable, MinuteBarTracker.BarListener {
         private final Options opts;
-        private final MovingAverages engine;
+        private final List<TreeMap<Long, Double>> massive;
         private final PrintWriter csv;
-        long count;
+        final MinuteBarTracker tracker;
+        final java.util.Set<Long> engineBars = new java.util.HashSet<>();
+        final int[] compared = new int[MovingAverages.WINDOWS.length];
+        final int[] matched = new int[MovingAverages.WINDOWS.length];
+        final int[] missingFromMassive = new int[MovingAverages.WINDOWS.length];
+        final double[] maxDiff = new double[MovingAverages.WINDOWS.length];
+        final List<List<Mismatch>> examples = new ArrayList<>();
+        long seen;
+        long applied;
         SmaSnapshot first;
-        SmaSnapshot last;
         private long lastPrintedBucket = Long.MIN_VALUE;
 
-        Collector(Options opts, MovingAverages engine) throws IOException {
+        Collector(Options opts, MovingAverages engine, List<TreeMap<Long, Double>> massive) throws IOException {
             this.opts = opts;
-            this.engine = engine;
+            this.massive = massive;
+            this.tracker = new MinuteBarTracker(engine, this);
+            for (int i = 0; i < MovingAverages.WINDOWS.length; i++) {
+                examples.add(new ArrayList<>());
+            }
             if (opts.csvOut() != null) {
                 csv = new PrintWriter(Files.newBufferedWriter(opts.csvOut(), StandardCharsets.UTF_8));
                 csv.println("time_et,sip_timestamp_ns,price,size,sma20,sma50,sma200");
@@ -164,20 +192,17 @@ public final class Replay {
         }
 
         void accept(PriceEvent event) {
-            ZonedDateTime et = event.easternTime();
-            if (opts.regularHoursOnly()) {
-                LocalTime t = et.toLocalTime();
-                if (t.isBefore(REGULAR_OPEN) || !t.isBefore(REGULAR_CLOSE)) {
-                    return;
-                }
+            seen++;
+            var maybe = tracker.onTrade(event);
+            if (maybe.isEmpty()) {
+                return;
             }
-            SmaSnapshot snap = engine.update(event);
+            SmaSnapshot snap = maybe.get();
+            applied++;
             if (first == null) {
                 first = snap;
             }
-            last = snap;
-            count++;
-
+            ZonedDateTime et = event.easternTime();
             if (csv != null) {
                 csv.printf(Locale.US, "%s,%d,%s,%s,%s,%s,%s%n", et.format(TIME), event.sipTimestampNanos(),
                         event.price(), event.size(), snap.sma20(), snap.sma50(), snap.sma200());
@@ -187,6 +212,30 @@ public final class Replay {
                 if (bucket != lastPrintedBucket) {
                     lastPrintedBucket = bucket;
                     out.printf("%s  %s%n", et.format(TIME), smas(snap));
+                }
+            }
+        }
+
+        @Override
+        public void barClosed(long barStartMs, double close, SmaSnapshot atClose, boolean filled) {
+            engineBars.add(barStartMs);
+            double[] engineValues = {atClose.sma20(), atClose.sma50(), atClose.sma200()};
+            for (int i = 0; i < MovingAverages.WINDOWS.length; i++) {
+                if (Double.isNaN(engineValues[i])) {
+                    continue;
+                }
+                Double expected = massive.get(i).get(barStartMs);
+                if (expected == null) {
+                    missingFromMassive[i]++;
+                    continue;
+                }
+                compared[i]++;
+                double diff = Math.abs(engineValues[i] - expected);
+                maxDiff[i] = Math.max(maxDiff[i], diff);
+                if (diff <= ORACLE_TOLERANCE) {
+                    matched[i]++;
+                } else if (examples.get(i).size() < MISMATCH_EXAMPLES) {
+                    examples.get(i).add(new Mismatch(barStartMs, engineValues[i], expected));
                 }
             }
         }

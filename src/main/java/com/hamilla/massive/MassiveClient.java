@@ -2,6 +2,7 @@ package com.hamilla.massive;
 
 import com.google.gson.JsonObject;
 import com.hamilla.market.DailyBar;
+import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 
 import java.io.IOException;
@@ -12,9 +13,10 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalDouble;
+import java.util.TreeMap;
 import java.util.function.Consumer;
 
 /**
@@ -27,8 +29,10 @@ public final class MassiveClient {
     public static final String API_KEY_ENV = "MASSIVE_API_KEY";
     public static final String BASE_URL_ENV = "MASSIVE_BASE_URL";
 
-    /** Massive's maximum page size for trades. */
-    static final int TRADES_PAGE_SIZE = 50_000;
+    /** Massive's maximum page size for trades and aggregates. */
+    static final int PAGE_SIZE = 50_000;
+    /** Massive's maximum page size for indicator values. */
+    static final int INDICATOR_PAGE_SIZE = 5_000;
     private static final int MAX_ATTEMPTS = 6;
 
     private final HttpClient http;
@@ -55,11 +59,27 @@ public final class MassiveClient {
         return new MassiveClient(http, base == null || base.isBlank() ? DEFAULT_BASE_URL : base, key);
     }
 
-    /** Completed daily bars for {@code ticker} between the two dates inclusive, oldest first, as Massive adjusts them. */
+    /** Completed daily bars for {@code ticker} between the two dates inclusive, oldest first. */
     public List<DailyBar> dailyBars(String ticker, LocalDate from, LocalDate to) throws IOException, InterruptedException {
         String url = baseUrl + "/v2/aggs/ticker/" + ticker + "/range/1/day/" + from + "/" + to
-                + "?adjusted=true&sort=asc&limit=50000";
+                + "?adjusted=true&sort=asc&limit=" + PAGE_SIZE;
         return MassiveJson.dailyBars(get(url));
+    }
+
+    /**
+     * One-minute bars for {@code ticker} between the two dates inclusive, oldest first, following
+     * pagination. Covers the full 04:00 to 20:00 Eastern session; minutes without trades have no bar.
+     */
+    public List<MinuteBar> minuteBars(String ticker, LocalDate from, LocalDate to) throws IOException, InterruptedException {
+        String url = baseUrl + "/v2/aggs/ticker/" + ticker + "/range/1/minute/" + from + "/" + to
+                + "?adjusted=true&sort=asc&limit=" + PAGE_SIZE;
+        List<MinuteBar> bars = new ArrayList<>();
+        while (url != null) {
+            JsonObject page = get(url);
+            bars.addAll(MassiveJson.minuteBars(page));
+            url = MassiveJson.nextUrl(page).orElse(null);
+        }
+        return bars;
     }
 
     /**
@@ -69,7 +89,7 @@ public final class MassiveClient {
      */
     public void trades(String ticker, LocalDate date, Consumer<PriceEvent> sink) throws IOException, InterruptedException {
         String url = baseUrl + "/v3/trades/" + ticker + "?timestamp=" + date
-                + "&order=asc&sort=timestamp&limit=" + TRADES_PAGE_SIZE;
+                + "&order=asc&sort=timestamp&limit=" + PAGE_SIZE;
         while (url != null) {
             JsonObject page = get(url);
             for (PriceEvent e : MassiveJson.trades(ticker, page)) {
@@ -80,31 +100,44 @@ public final class MassiveClient {
     }
 
     /**
-     * The most recent trade for {@code ticker} on trading day {@code date} whose SIP timestamp is at or
-     * before {@code at}. Empty when there was no trade yet (before 04:00 Eastern, or not a trading day).
+     * The most recent trade for {@code ticker} on trading day {@code date} at or before {@code at}
+     * that updates the close (so odd lots and similar prints are skipped). Empty when there was no
+     * such trade yet: before 04:00 Eastern, or not a trading day.
      */
-    public Optional<PriceEvent> lastTradeAtOrBefore(String ticker, LocalDate date, Instant at)
+    public Optional<PriceEvent> lastUpdatingTradeAtOrBefore(String ticker, LocalDate date, Instant at)
             throws IOException, InterruptedException {
         long nanos = Math.addExact(Math.multiplyExact(at.getEpochSecond(), 1_000_000_000L), at.getNano());
         String url = baseUrl + "/v3/trades/" + ticker + "?timestamp.gte=" + date + "&timestamp.lte=" + nanos
-                + "&order=desc&sort=timestamp&limit=1";
-        List<PriceEvent> trades = MassiveJson.trades(ticker, get(url));
-        return trades.isEmpty() ? Optional.empty() : Optional.of(trades.get(0));
+                + "&order=desc&sort=timestamp&limit=200";
+        while (url != null) {
+            JsonObject page = get(url);
+            for (PriceEvent e : MassiveJson.trades(ticker, page)) {
+                if (e.updatesClose()) {
+                    return Optional.of(e);
+                }
+            }
+            url = MassiveJson.nextUrl(page).orElse(null);
+        }
+        return Optional.empty();
     }
 
     /**
-     * Massive's own daily SMA for {@code ticker} on {@code date}, computed from completed daily closes.
-     * Empty if Massive has no value for exactly that date.
+     * Massive's own {@code window}-bar SMA of one-minute closes for every bar on {@code date},
+     * keyed by bar start in epoch milliseconds, oldest first. This is the oracle the replay checks against.
      */
-    public OptionalDouble sma(String ticker, int window, LocalDate date) throws IOException, InterruptedException {
-        String url = baseUrl + "/v1/indicators/sma/" + ticker + "?timespan=day&adjusted=true&window=" + window
-                + "&series_type=close&timestamp=" + date + "&order=desc&limit=1";
-        JsonObject response = get(url);
-        Optional<LocalDate> valueDate = MassiveJson.smaDate(response);
-        if (valueDate.isEmpty() || !valueDate.get().equals(date)) {
-            return OptionalDouble.empty();
+    public TreeMap<Long, Double> minuteSma(String ticker, int window, LocalDate date) throws IOException, InterruptedException {
+        long dayStart = date.atStartOfDay(PriceEvent.EASTERN).toInstant().toEpochMilli();
+        long dayEnd = date.plusDays(1).atStartOfDay(PriceEvent.EASTERN).toInstant().toEpochMilli();
+        String url = baseUrl + "/v1/indicators/sma/" + ticker + "?timespan=minute&adjusted=true&window=" + window
+                + "&series_type=close&timestamp.gte=" + dayStart + "&timestamp.lt=" + dayEnd
+                + "&order=asc&limit=" + INDICATOR_PAGE_SIZE;
+        TreeMap<Long, Double> values = new TreeMap<>();
+        while (url != null) {
+            JsonObject page = get(url);
+            values.putAll(MassiveJson.smaValues(page));
+            url = MassiveJson.nextUrl(page).orElse(null);
         }
-        return MassiveJson.smaValue(response);
+        return values;
     }
 
     private JsonObject get(String url) throws IOException, InterruptedException {

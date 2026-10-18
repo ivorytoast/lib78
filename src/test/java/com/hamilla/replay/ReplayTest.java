@@ -1,6 +1,9 @@
 package com.hamilla.replay;
 
+import com.hamilla.market.MinuteBar;
 import com.hamilla.massive.MassiveClient;
+import com.hamilla.sma.Fixture;
+import com.hamilla.sma.SessionMinutes;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -8,10 +11,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.net.InetSocketAddress;
@@ -22,53 +23,89 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Runs the whole replay against a local server that answers like Massive did for SPY on 2026-10-16:
- * the daily history from the fixture, the day's bar, two pages of trades, and the SMA oracle values.
+ * Runs the whole replay against a local server. The "previous day" minute bars are the RIVN fixture
+ * shifted back one day, the replay day has a handful of trades, and Massive's minute SMA values are
+ * computed in the test from the same filled series, so every bar must match.
  */
 class ReplayTest {
 
     private static final LocalDate DAY = LocalDate.of(2026, 10, 16);
-    private static final String[] FIXTURE_ROWS = loadFixture();
+    private static final long DAY_MS = 86_400_000L;
+    private static final long T_0400 = 1792137600000L;
+    private static final long NS = 1_000_000L;
+
+    /** Replay-day trades: (ms, price, odd lot?). 04:00 has only an odd lot, 04:01 trades, 04:02 is empty, 04:03 trades. */
+    private static final double[][] TRADES = {
+            {T_0400 + 500, 12.60, 1},
+            {T_0400 + 60_000 + 100, 12.70, 0},
+            {T_0400 + 60_000 + 200, 12.75, 1},
+            {T_0400 + 60_000 + 300, 12.72, 0},
+            {T_0400 + 180_000 + 100, 12.80, 0},
+    };
 
     private HttpServer server;
     private MassiveClient client;
     private ByteArrayOutputStream console;
+    private List<Double> expectedClosedSeries;
 
     @BeforeEach
     void start() throws IOException {
+        // Previous day: fixture bars shifted back 24h (same wall-clock minutes), filled to 19:59.
+        List<MinuteBar> prev = new ArrayList<>();
+        for (MinuteBar b : Fixture.rivnBars()) {
+            prev.add(new MinuteBar(b.startMs() - DAY_MS, b.open(), b.high(), b.low(), b.close(), b.volume()));
+        }
+        List<Double> series = new ArrayList<>(SessionMinutes.fillCloses(prev, SessionMinutes.lastBarOfSession(prev.get(0).startMs())));
+        // Replay day bars as the engine must produce them: 04:00 empty -> filled with 19:59 close, 04:01 = 12.72, 04:02 filled, 04:03 = 12.80.
+        series.add(series.get(series.size() - 1));
+        series.add(12.72);
+        series.add(12.72);
+        series.add(12.80);
+        expectedClosedSeries = series;
+
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         String base = "http://127.0.0.1:" + server.getAddress().getPort();
-
-        server.createContext("/v2/aggs/ticker/SPY/range/1/day/", ex -> {
-            String[] parts = ex.getRequestURI().getPath().split("/");
-            LocalDate from = LocalDate.parse(parts[parts.length - 2]);
-            LocalDate to = LocalDate.parse(parts[parts.length - 1]);
-            reply(ex, "{\"results\":[" + barsJson(from, to) + "]}");
+        server.createContext("/v2/aggs/ticker/RIVN/range/1/minute/", ex -> reply(ex, "{\"results\":[" + barsJson(prev) + "]}"));
+        server.createContext("/v3/trades/RIVN", ex -> {
+            StringBuilder sb = new StringBuilder("{\"results\":[");
+            for (int i = 0; i < TRADES.length; i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append(String.format(Locale.US, "{\"sip_timestamp\":%d,\"price\":%s,\"size\":100%s}",
+                        (long) TRADES[i][0] * NS, TRADES[i][1], TRADES[i][2] == 1 ? ",\"conditions\":[37]" : ""));
+            }
+            reply(ex, sb.append("]}").toString());
         });
-        server.createContext("/v3/trades/SPY", ex -> reply(ex, """
-                {"results":[
-                  {"sip_timestamp":1792137600013823361,"price":772.83,"size":10},
-                  {"sip_timestamp":1792157400000000000,"price":773.29,"size":100},
-                  {"sip_timestamp":1792159200000000000,"price":770.10,"size":50}
-                ],"next_url":"%s/trades-page-2"}
-                """.formatted(base)));
-        server.createContext("/trades-page-2", ex -> reply(ex, """
-                {"results":[
-                  {"sip_timestamp":1792180799000000000,"price":763.20,"size":200},
-                  {"sip_timestamp":1792195200003234508,"price":763.25,"size":2721956}
-                ]}
-                """));
-        server.createContext("/v1/indicators/sma/SPY", ex -> {
+        server.createContext("/v1/indicators/sma/RIVN", ex -> {
             String q = ex.getRequestURI().getQuery();
-            double value = q.contains("window=20&") ? 771.1840000000002
-                    : q.contains("window=50&") ? 768.5017999999998 : 725.0145999999993;
-            reply(ex, "{\"results\":{\"values\":[{\"timestamp\":1792123200000,\"value\":" + value + "}]}}");
+            int window = q.contains("window=20&") ? 20 : q.contains("window=50&") ? 50 : 200;
+            // Massive would report a value for every replay-day bar: 04:00 .. 04:03 and then filled bars to 19:59.
+            StringBuilder sb = new StringBuilder("{\"results\":{\"values\":[");
+            List<Double> full = new ArrayList<>(expectedClosedSeries);
+            for (int i = 0; i < 956; i++) {
+                full.add(12.80); // 04:04 .. 19:59 repeat the 04:03 close
+            }
+            int firstReplayIndex = expectedClosedSeries.size() - 4;
+            for (int i = firstReplayIndex; i < full.size(); i++) {
+                double sum = 0;
+                for (int k = i - window + 1; k <= i; k++) {
+                    sum += full.get(k);
+                }
+                if (i > firstReplayIndex) {
+                    sb.append(',');
+                }
+                sb.append(String.format(Locale.US, "{\"timestamp\":%d,\"value\":%s}",
+                        T_0400 + (long) (i - firstReplayIndex) * 60_000L, sum / window));
+            }
+            reply(ex, sb.append("]}}").toString());
         });
         server.start();
 
@@ -82,43 +119,55 @@ class ReplayTest {
     }
 
     @Test
-    void fullDayReplayPassesOracleAndWritesCsv(@TempDir Path tmp) throws Exception {
-        Path csv = tmp.resolve("spy.csv");
+    void fullDayReplayMatchesMassiveOnEveryBarAndWritesCsv(@TempDir Path tmp) throws Exception {
+        Path csv = tmp.resolve("rivn.csv");
         Replay replay = new Replay(client, new PrintStream(console, true, StandardCharsets.UTF_8));
 
-        Replay.Result r = replay.run(new Replay.Options("SPY", DAY, false, 30, csv));
+        Replay.Result r = replay.run(new Replay.Options("RIVN", DAY, 30, csv));
 
-        assertEquals(5, r.trades());
-        assertEquals(772.83, r.first().price());
-        assertEquals(763.25, r.last().price());
-        assertEquals(763.25, r.officialBar().close());
-        assertTrue(r.allOraclesPass(), r.oracleChecks().toString());
-        assertEquals(771.1840000000002, r.last().sma20(), 1e-6);
+        assertEquals(5, r.tradesSeen());
+        assertEquals(3, r.tradesApplied());
+        assertEquals(960, r.barsClosed());          // every minute 04:00 .. 19:59
+        assertEquals(958, r.barsFilled());          // all but 04:01 and 04:03
+        assertEquals(12.70, r.first().price());
+        assertEquals(12.80, r.last().price());
+        for (Replay.OracleCheck c : r.oracleChecks()) {
+            assertEquals(960, c.barsCompared(), c.toString());
+            assertEquals(960, c.barsMatched(), c.toString());
+            assertEquals(0, c.barsMissingFromEngine(), c.toString());
+            assertTrue(c.pass(), c.toString());
+        }
+        assertTrue(r.allOraclesPass());
 
         List<String> lines = Files.readAllLines(csv);
         assertEquals("time_et,sip_timestamp_ns,price,size,sma20,sma50,sma200", lines.get(0));
-        assertEquals(6, lines.size());
-        assertTrue(lines.get(1).startsWith("04:00:00.013,1792137600013823361,772.83,10.0,"));
+        assertEquals(4, lines.size());
+        assertTrue(lines.get(1).startsWith("04:01:00.100,1792137660100000000,12.7,100.0,"));
 
         String out = console.toString(StandardCharsets.UTF_8);
-        assertTrue(out.contains("5 trades replayed"), out);
-        assertTrue(out.contains("sma20  engine=771.184000"), out);
-        assertTrue(out.contains("PASS"), out);
+        assertTrue(out.contains("5 trades seen, 3 applied to bars, 960 bars closed (958 of them repeated an empty minute)"), out);
+        assertTrue(out.contains("960/960  bars match"), out);
         assertFalse(out.contains("FAIL"), out);
-        assertTrue(out.contains("211 prior daily closes loaded") || out.contains("210 prior daily closes loaded"), out);
     }
 
     @Test
-    void regularHoursOnlyDropsPreMarketAndAfterHoursTrades() throws Exception {
+    void mismatchesAreReportedWithExamples() throws Exception {
+        // Replace the SMA oracle with one that is wrong for the 04:01 bar of the 20 window.
+        server.removeContext("/v1/indicators/sma/RIVN");
+        server.createContext("/v1/indicators/sma/RIVN", ex -> reply(ex,
+                "{\"results\":{\"values\":[{\"timestamp\":" + (T_0400 + 60_000) + ",\"value\":99.0}]}}"));
         Replay replay = new Replay(client, new PrintStream(console, true, StandardCharsets.UTF_8));
 
-        Replay.Result r = replay.run(new Replay.Options("SPY", DAY, true, 0, null));
+        Replay.Result r = replay.run(new Replay.Options("RIVN", DAY, 0, null));
 
-        // 04:00 pre-market and the 20:00 print are dropped; 09:30, 10:00 and 15:59:59 remain.
-        assertEquals(3, r.trades());
-        assertEquals(773.29, r.first().price());
-        assertEquals(763.20, r.last().price());
-        assertTrue(r.allOraclesPass());
+        assertFalse(r.allOraclesPass());
+        Replay.OracleCheck sma20 = r.oracleChecks().get(0);
+        assertEquals(1, sma20.barsCompared());
+        assertEquals(0, sma20.barsMatched());
+        assertEquals(959, sma20.barsMissingFromMassive());
+        assertEquals(1, sma20.examples().size());
+        assertEquals(T_0400 + 60_000, sma20.examples().get(0).barStartMs());
+        assertTrue(console.toString(StandardCharsets.UTF_8).contains("04:01 engine="), console.toString());
     }
 
     private static void reply(HttpExchange ex, String body) throws IOException {
@@ -129,26 +178,12 @@ class ReplayTest {
         }
     }
 
-    /** Fixture rows (v,vw,o,c,h,l,t,n) whose trading date falls in [from, to], rendered as aggregate JSON objects. */
-    private static String barsJson(LocalDate from, LocalDate to) {
+    private static String barsJson(List<MinuteBar> bars) {
         List<String> objs = new ArrayList<>();
-        for (String row : FIXTURE_ROWS) {
-            String[] f = row.split(",");
-            long t = Long.parseLong(f[6]);
-            LocalDate d = java.time.Instant.ofEpochMilli(t).atZone(com.hamilla.market.PriceEvent.EASTERN).toLocalDate();
-            if (!d.isBefore(from) && !d.isAfter(to)) {
-                objs.add("{\"o\":" + f[2] + ",\"c\":" + f[3] + ",\"h\":" + f[4] + ",\"l\":" + f[5] + ",\"t\":" + t + ",\"v\":" + f[0] + "}");
-            }
+        for (MinuteBar b : bars) {
+            objs.add(String.format(Locale.US, "{\"o\":%s,\"h\":%s,\"l\":%s,\"c\":%s,\"t\":%d,\"v\":%s}",
+                    b.open(), b.high(), b.low(), b.close(), b.startMs(), b.volume()));
         }
         return String.join(",", objs);
-    }
-
-    private static String[] loadFixture() {
-        try (var in = ReplayTest.class.getResourceAsStream("/spy-daily.csv");
-             var reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-            return reader.lines().skip(1).toArray(String[]::new);
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
     }
 }
