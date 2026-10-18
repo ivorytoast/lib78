@@ -25,6 +25,7 @@ public final class Main {
                     there is an entry signal:
                       BUY LONG    200 below 50, 50 below 20 by 3+ cents, price above the 20 by at most 2 cents
                       SHORT SELL  200 above 50, 50 above 20 by 3+ cents, price below the 20 by at most 2 cents
+                    After a signal prints, none prints until --cooldown minutes have passed.
                     Nothing else is printed. Pre-market bars still feed the averages.
                     With no date, the most recent completed trading day is used.
             at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),
@@ -33,6 +34,8 @@ public final class Main {
             options:
               --session <HH:MM-HH:MM>  daily window of bars the averages run on, Eastern time
                                        (default 04:00-20:00; a minute with no trade has no bar)
+              --cooldown <minutes>  replay: minutes after a printed signal during which no signal
+                            prints (default 6; 0 prints every signal)
               --verbose     replay: print every minute with its up/down/none zone, any signal,
                             the price and the three averages, plus a summary line
               --verify      replay: run on Massive's filled 04:00-20:00 series instead and compare
@@ -78,12 +81,14 @@ public final class Main {
             System.exit(at(symbols, session, args));
         }
         LocalDate date = null;
+        int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
         boolean verbose = false;
         boolean verify = false;
         Path csv = null;
 
         for (int i = 2; i < args.length; i++) {
             switch (args[i]) {
+                case "--cooldown" -> cooldown = Integer.parseInt(requireValue(args, ++i));
                 case "--verbose" -> verbose = true;
                 case "--verify" -> verify = true;
                 case "--csv" -> csv = Path.of(requireValue(args, ++i));
@@ -110,7 +115,7 @@ public final class Main {
             LocalDate day = date != null ? date
                     : TradingCalendar.previousTradingDay(client, symbol, LocalDate.now(PriceEvent.EASTERN));
             Path csvFor = csvFor(csv, symbol, symbols.size() > 1);
-            Replay.Result result = replay.run(new Replay.Options(symbol, day, session, verbose, verify, csvFor));
+            Replay.Result result = replay.run(new Replay.Options(symbol, day, session, cooldown, verbose, verify, csvFor));
             allPass &= result.allOraclesPass();
         }
         System.exit(allPass ? 0 : 1);

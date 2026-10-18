@@ -57,17 +57,32 @@ public final class Replay {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
     private static final DateTimeFormatter BAR_TIME = DateTimeFormatter.ofPattern("HH:mm");
 
+    /** Default minutes that must pass after a printed signal before another is printed. */
+    public static final int DEFAULT_COOLDOWN_MINUTES = 6;
+
     /**
-     * @param symbol  ticker to replay
-     * @param date    trading day to replay
-     * @param session daily window of bars the averages run on (ignored with {@code verify})
-     * @param verbose append price and the three averages to each printed minute
-     * @param verify  run on Massive's filled series and compare every bar with its minute SMA endpoint
-     * @param csvOut  optional path to write one row per close-updating trade
+     * @param symbol          ticker to replay
+     * @param date            trading day to replay
+     * @param session         daily window of bars the averages run on (ignored with {@code verify})
+     * @param cooldownMinutes after a signal prints, no signal prints until this many minutes have passed (0 = none)
+     * @param verbose         print every minute with its zone, signal, price and averages
+     * @param verify          run on Massive's filled series and compare every bar with its minute SMA endpoint
+     * @param csvOut          optional path to write one row per close-updating trade
      */
-    public record Options(String symbol, LocalDate date, Session session, boolean verbose, boolean verify, Path csvOut) {
+    public record Options(String symbol, LocalDate date, Session session, int cooldownMinutes,
+                          boolean verbose, boolean verify, Path csvOut) {
+        public Options {
+            if (cooldownMinutes < 0) {
+                throw new IllegalArgumentException("cooldown must be 0 or more minutes, got " + cooldownMinutes);
+            }
+        }
+
         public Options(String symbol, LocalDate date, boolean verbose, boolean verify, Path csvOut) {
-            this(symbol, date, Session.EXTENDED, verbose, verify, csvOut);
+            this(symbol, date, Session.EXTENDED, DEFAULT_COOLDOWN_MINUTES, verbose, verify, csvOut);
+        }
+
+        public Options(String symbol, LocalDate date, Session session, boolean verbose, boolean verify, Path csvOut) {
+            this(symbol, date, session, DEFAULT_COOLDOWN_MINUTES, verbose, verify, csvOut);
         }
 
         /** The series actually used: Massive's filled extended session when verifying, else the chart series. */
@@ -76,8 +91,11 @@ public final class Replay {
         }
     }
 
-    /** One classified minute; {@code action} is empty when there is no entry signal. */
-    public record Signal(long barStartMs, Trend trend, Optional<Action> action, SmaSnapshot atClose) {
+    /**
+     * One classified minute. {@code action} is empty when there is no entry signal; {@code printed} is
+     * false for a signal held back by the cooldown.
+     */
+    public record Signal(long barStartMs, Trend trend, Optional<Action> action, boolean printed, SmaSnapshot atClose) {
     }
 
     /** One bar where the engine and Massive disagree. */
@@ -110,15 +128,22 @@ public final class Replay {
             return counts;
         }
 
+        /** Signals by kind, counting only those printed (not held back by the cooldown). */
         public Map<Action, Long> actionCounts() {
             Map<Action, Long> counts = new EnumMap<>(Action.class);
             for (Action a : Action.values()) {
                 counts.put(a, 0L);
             }
             for (Signal s : signals) {
-                s.action().ifPresent(a -> counts.merge(a, 1L, Long::sum));
+                if (s.printed()) {
+                    s.action().ifPresent(a -> counts.merge(a, 1L, Long::sum));
+                }
             }
             return counts;
+        }
+
+        public long signalsHeldByCooldown() {
+            return signals.stream().filter(s -> s.action().isPresent() && !s.printed()).count();
         }
     }
 
@@ -207,9 +232,10 @@ public final class Replay {
         if (opts.verbose()) {
             Map<Trend, Long> counts = r.counts();
             Map<Action, Long> actions = r.actionCounts();
-            out.printf("%s %s: %d minutes, up %d, down %d, none %d, buy long %d, short sell %d (%,d trades, %,d applied, %,d bars, %,d empty minutes)%n",
+            out.printf("%s %s: %d minutes, up %d, down %d, none %d, buy long %d, short sell %d, %d held by cooldown"
+                            + " (%,d trades, %,d applied, %,d bars, %,d empty minutes)%n",
                     r.symbol(), r.date(), r.signals().size(), counts.get(Trend.UP), counts.get(Trend.DOWN), counts.get(Trend.NONE),
-                    actions.get(Action.BUY_LONG), actions.get(Action.SHORT_SELL),
+                    actions.get(Action.BUY_LONG), actions.get(Action.SHORT_SELL), r.signalsHeldByCooldown(),
                     r.tradesSeen(), r.tradesApplied(), r.barsClosed(), r.emptyMinutes());
         }
         if (r.oracleChecks().isEmpty()) {
@@ -251,6 +277,7 @@ public final class Replay {
         final List<List<Mismatch>> examples = new ArrayList<>();
         long seen;
         long applied;
+        private long lastPrintedMs = Long.MIN_VALUE;
 
         Collector(Options opts, MovingAverages engine, List<TreeMap<Long, Double>> massive) throws IOException {
             this.opts = opts;
@@ -288,12 +315,22 @@ public final class Replay {
             if (printed(barStartMs)) {
                 Trend trend = Trend.of(atClose);
                 Optional<Action> action = Action.of(atClose);
-                signals.add(new Signal(barStartMs, trend, action, atClose));
+                boolean print = action.isPresent()
+                        && (lastPrintedMs == Long.MIN_VALUE
+                            || barStartMs - lastPrintedMs >= opts.cooldownMinutes() * Session.MINUTE_MS);
+                if (print) {
+                    lastPrintedMs = barStartMs;
+                }
+                signals.add(new Signal(barStartMs, trend, action, print, atClose));
                 if (opts.verbose()) {
-                    out.printf(Locale.US, "%s %-4s %-10s px=%-10.4f sma20=%-10.4f sma50=%-10.4f sma200=%-10.4f%n",
-                            barTime(barStartMs), trend.label(), action.map(Action::label).orElse(""),
+                    String label = action.map(Action::label).orElse("");
+                    if (action.isPresent() && !print) {
+                        label += " (cooldown)";
+                    }
+                    out.printf(Locale.US, "%s %-4s %-21s px=%-10.4f sma20=%-10.4f sma50=%-10.4f sma200=%-10.4f%n",
+                            barTime(barStartMs), trend.label(), label,
                             atClose.price(), atClose.sma20(), atClose.sma50(), atClose.sma200());
-                } else if (action.isPresent()) {
+                } else if (print) {
                     out.printf("%s %s%n", barTime(barStartMs), action.get().label());
                 }
             }

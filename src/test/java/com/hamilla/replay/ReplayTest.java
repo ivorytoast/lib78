@@ -166,12 +166,31 @@ class ReplayTest {
         assertEquals(20, r.tradesApplied());
         assertTrue(r.oracleChecks().isEmpty());
 
+        // The signal holds every minute from 09:48 to 15:59 (372 minutes); with the default six-minute
+        // cooldown only every sixth one prints: 09:48, 09:54, ... 15:54.
+        assertTrue(r.signals().get(3).printed());
+        assertFalse(r.signals().get(4).printed());
+        assertTrue(r.signals().get(9).printed());
+        assertEquals(372 - 62, r.signalsHeldByCooldown());
         String[] lines = console.toString(StandardCharsets.UTF_8).split("\\R");
         assertEquals("09:48 SHORT SELL", lines[0]);
-        assertEquals("15:59 SHORT SELL", lines[lines.length - 1]);
-        assertEquals(372, lines.length);                        // SHORT SELL from 09:48 to 15:59, no summary
+        assertEquals("09:54 SHORT SELL", lines[1]);
+        assertEquals("15:54 SHORT SELL", lines[lines.length - 1]);
+        assertEquals(62, lines.length);                         // no summary line
         assertFalse(console.toString(StandardCharsets.UTF_8).contains("none"));
         assertFalse(console.toString(StandardCharsets.UTF_8).contains("BUY"));
+    }
+
+    @Test
+    void cooldownZeroPrintsEverySignal() throws Exception {
+        Replay replay = new Replay(client, new PrintStream(console, true, StandardCharsets.UTF_8));
+
+        Replay.Result r = replay.run(new Replay.Options("RIVN", DAY, Session.EXTENDED, 0, false, false, null));
+
+        assertEquals(0, r.signalsHeldByCooldown());
+        String[] lines = console.toString(StandardCharsets.UTF_8).split("\\R");
+        assertEquals(372, lines.length);
+        assertEquals("15:59 SHORT SELL", lines[371]);
     }
 
     @Test
@@ -203,11 +222,13 @@ class ReplayTest {
         assertTrue(r.allOraclesPass());
 
         String out = console.toString(StandardCharsets.UTF_8);
-        assertTrue(out.contains("09:45 none            px=10.0200    sma20=10.0010    sma50=10.0004    sma200=10.0001"), out);
-        assertTrue(out.contains("09:46 none            px=9.0000"), out);
-        assertTrue(out.contains("09:47 down            px=8.0000"), out);
-        assertTrue(out.contains("09:48 down SHORT SELL px=9.8300"), out);
+        assertTrue(out.contains("09:45 none                       px=10.0200    sma20=10.0010    sma50=10.0004    sma200=10.0001"), out);
+        assertTrue(out.contains("09:46 none                       px=9.0000"), out);
+        assertTrue(out.contains("09:47 down                       px=8.0000"), out);
+        assertTrue(out.contains("09:48 down SHORT SELL            px=9.8300"), out);
+        assertTrue(out.contains("09:49 down SHORT SELL (cooldown) px=9.8300"), out);
         assertTrue(out.contains("minutes, up 0, down "), out);
+        assertTrue(out.contains("held by cooldown"), out);
         assertTrue(out.contains("960/960  bars match"), out);
         assertEquals(960, r.barsClosed());
         assertFalse(out.contains("FAIL"), out);

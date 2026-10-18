@@ -95,23 +95,28 @@ and prints the minute only when the zone gives an entry signal:
 15:57 SHORT SELL
 ```
 
-The price and averages used for a minute are those at its close, meaning the
-last close-updating trade in it. Minutes before 09:45, including pre-market,
-still feed the averages; they are just never printed.
+Once a signal prints, no signal prints until 6 minutes have passed (`--cooldown`
+changes the number; 0 prints every signal). The price and averages used for a
+minute are those at its close, meaning the last close-updating trade in it.
+Minutes before 09:45, including pre-market, still feed the averages; they are
+just never printed.
 
 `expected/RIVN-2026-10-16.txt` holds the full expected output for that day,
 derived independently from every trade of the day, so
 `replay RIVN 2026-10-16 | diff - expected/RIVN-2026-10-16.txt`
-should print nothing. RIVN fell all day, so it has 45 `SHORT SELL` lines and
-no `BUY LONG`.
+should print nothing. RIVN fell all day, so it has 20 `SHORT SELL` lines and
+no `BUY LONG` (45 minutes qualified; the cooldown holds back 25).
 
 Options:
 
 - `--session HH:MM-HH:MM` sets the daily window of bars, e.g. `07:00-20:00`
   for a platform whose extended hours start at 07:00, or `09:30-16:00` for
   regular hours only.
-- `--verbose` prints every minute with its zone, any signal, the price and the
-  three averages, followed by a summary line.
+- `--cooldown <minutes>` sets the quiet period after a printed signal
+  (default 6).
+- `--verbose` prints every minute with its zone, any signal (marked
+  `(cooldown)` when held back), the price and the three averages, followed by
+  a summary line.
 - `--verify` runs on Massive's filled series instead and compares the
   engine's three values at every completed bar with Massive's own
   `/v1/indicators/sma` minute values, reporting per window how many bars
