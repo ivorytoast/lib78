@@ -5,7 +5,7 @@ import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
 import com.hamilla.sma.MinuteBarTracker;
 import com.hamilla.sma.MovingAverages;
-import com.hamilla.sma.SessionMinutes;
+import com.hamilla.sma.Session;
 import com.hamilla.sma.SmaSnapshot;
 import com.hamilla.sma.Trend;
 
@@ -35,8 +35,10 @@ import java.util.TreeMap;
  * whether the 20/50/200 alignment and price say "up", "down" or "none". Earlier minutes, including
  * pre-market, still feed the averages; they are just not printed.
  *
- * <p>With {@link Options#verify()} every completed bar's three averages are also compared with
- * Massive's own minute SMA endpoint, which is the correctness test for the engine.
+ * <p>By default the bars are the chart series: the {@link Options#session()} window, with a bar
+ * only for a minute that had a close-updating trade. With {@link Options#verify()} the replay
+ * instead runs on Massive's filled 04:00 to 20:00 series and compares every completed bar's three
+ * averages with Massive's own minute SMA endpoint, which is the correctness test for the engine.
  */
 public final class Replay {
 
@@ -54,11 +56,20 @@ public final class Replay {
     /**
      * @param symbol  ticker to replay
      * @param date    trading day to replay
+     * @param session daily window of bars the averages run on (ignored with {@code verify})
      * @param verbose append price and the three averages to each printed minute
-     * @param verify  compare every completed bar with Massive's minute SMA endpoint and report
+     * @param verify  run on Massive's filled series and compare every bar with its minute SMA endpoint
      * @param csvOut  optional path to write one row per close-updating trade
      */
-    public record Options(String symbol, LocalDate date, boolean verbose, boolean verify, Path csvOut) {
+    public record Options(String symbol, LocalDate date, Session session, boolean verbose, boolean verify, Path csvOut) {
+        public Options(String symbol, LocalDate date, boolean verbose, boolean verify, Path csvOut) {
+            this(symbol, date, Session.EXTENDED, verbose, verify, csvOut);
+        }
+
+        /** The series actually used: Massive's filled extended session when verifying, else the chart series. */
+        public Session effectiveSession() {
+            return verify ? Session.EXTENDED : session;
+        }
     }
 
     /** One printed minute. */
@@ -79,7 +90,7 @@ public final class Replay {
 
     /** What the replay found, for callers that want to inspect rather than read the console. */
     public record Result(String symbol, LocalDate date, long tradesSeen, long tradesApplied, long barsClosed,
-                         long barsFilled, List<Signal> signals, List<OracleCheck> oracleChecks) {
+                         long emptyMinutes, List<Signal> signals, List<OracleCheck> oracleChecks) {
         public boolean allOraclesPass() {
             return oracleChecks.stream().allMatch(OracleCheck::pass);
         }
@@ -108,9 +119,18 @@ public final class Replay {
         String symbol = opts.symbol();
         LocalDate date = opts.date();
 
+        Session session = opts.effectiveSession();
+        boolean fill = opts.verify();
+
         List<MinuteBar> history = client.minuteBars(symbol, date.minusDays(WARMUP_CALENDAR_DAYS), date.minusDays(1));
-        List<Double> closes = history.isEmpty() ? List.of()
-                : SessionMinutes.fillCloses(history, SessionMinutes.lastBarOfSession(history.get(history.size() - 1).startMs()));
+        List<Double> closes;
+        if (history.isEmpty()) {
+            closes = List.of();
+        } else if (fill) {
+            closes = session.fillCloses(history, session.lastBarOfDay(history.get(history.size() - 1).startMs()));
+        } else {
+            closes = session.closes(history, Long.MAX_VALUE);
+        }
         if (closes.size() < LARGEST_WINDOW - 1) {
             out.printf("warning: only %d prior minute bars, the 200 bar SMA will be unavailable at first%n", closes.size());
         }
@@ -122,11 +142,18 @@ public final class Replay {
             }
         }
 
-        MovingAverages engine = new MovingAverages(symbol, closes);
+        // The engine starts with every warm-up close but the last; the tracker rolls that one in as the seed bar.
+        MovingAverages engine = new MovingAverages(symbol, closes.isEmpty() ? closes : closes.subList(0, closes.size() - 1));
         Collector collector = new Collector(opts, engine, massive);
-        if (!history.isEmpty()) {
-            MinuteBar lastBar = history.get(history.size() - 1);
-            collector.tracker.seed(SessionMinutes.lastBarOfSession(lastBar.startMs()), lastBar.close());
+        if (!closes.isEmpty()) {
+            long lastInSession = history.get(history.size() - 1).startMs();
+            for (int i = history.size() - 1; i >= 0; i--) {
+                if (session.contains(history.get(i).startMs())) {
+                    lastInSession = history.get(i).startMs();
+                    break;
+                }
+            }
+            collector.tracker.seed(fill ? session.lastBarOfDay(lastInSession) : lastInSession, closes.get(closes.size() - 1));
         }
         try (collector) {
             new ReplaySource(client, symbol, date).stream(collector::accept);
@@ -152,20 +179,20 @@ public final class Replay {
         }
 
         Result result = new Result(symbol, date, collector.seen, collector.applied, collector.tracker.barsClosed(),
-                collector.tracker.barsFilled(), collector.signals, checks);
+                collector.tracker.emptyMinutes(), collector.signals, checks);
         printSummary(result);
         return result;
     }
 
     private void printSummary(Result r) {
         Map<Trend, Long> counts = r.counts();
-        out.printf("%s %s: %d minutes, up %d, down %d, none %d (%,d trades, %,d applied, %,d bars)%n",
+        out.printf("%s %s: %d minutes, up %d, down %d, none %d (%,d trades, %,d applied, %,d bars, %,d empty minutes)%n",
                 r.symbol(), r.date(), r.signals().size(), counts.get(Trend.UP), counts.get(Trend.DOWN), counts.get(Trend.NONE),
-                r.tradesSeen(), r.tradesApplied(), r.barsClosed());
+                r.tradesSeen(), r.tradesApplied(), r.barsClosed(), r.emptyMinutes());
         if (r.oracleChecks().isEmpty()) {
             return;
         }
-        out.println("verify (engine at each bar close vs Massive minute SMA):");
+        out.println("verify (engine on Massive's filled 04:00-20:00 series, at each bar close, vs Massive minute SMA):");
         for (OracleCheck c : r.oracleChecks()) {
             out.printf("  sma%-3d %4d/%-4d bars match, max diff %.9f, %d bars Massive lacks, %d bars engine lacks  %s%n",
                     c.window(), c.barsMatched(), c.barsCompared(), c.maxAbsDiff(),
@@ -205,7 +232,7 @@ public final class Replay {
         Collector(Options opts, MovingAverages engine, List<TreeMap<Long, Double>> massive) throws IOException {
             this.opts = opts;
             this.massive = massive;
-            this.tracker = new MinuteBarTracker(engine, this);
+            this.tracker = new MinuteBarTracker(engine, opts.effectiveSession(), opts.verify(), this);
             for (int i = 0; i < MovingAverages.WINDOWS.length; i++) {
                 examples.add(new ArrayList<>());
             }
@@ -233,7 +260,7 @@ public final class Replay {
         }
 
         @Override
-        public void barClosed(long barStartMs, double close, SmaSnapshot atClose, boolean filled) {
+        public void barClosed(long barStartMs, double close, SmaSnapshot atClose, boolean empty) {
             if (printed(barStartMs)) {
                 Trend trend = Trend.of(atClose);
                 signals.add(new Signal(barStartMs, trend, atClose));

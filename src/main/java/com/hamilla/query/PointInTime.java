@@ -4,7 +4,7 @@ import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
 import com.hamilla.sma.MovingAverages;
-import com.hamilla.sma.SessionMinutes;
+import com.hamilla.sma.Session;
 import com.hamilla.sma.SmaSnapshot;
 
 import java.io.IOException;
@@ -21,7 +21,8 @@ import java.util.Optional;
 /**
  * Answers "what were the price and the 20/50/200 minute-bar SMAs for this symbol at this moment".
  * The price is the last close-updating trade at or before the moment; the averages are what the
- * engine would have shown on that trade, using the one-minute bars completed before its bar.
+ * engine would have shown on that trade, using the chart series of one-minute bars completed before
+ * its bar: bars inside the {@link Session}, with no bar for a minute that had no updating trade.
  */
 public final class PointInTime {
 
@@ -35,9 +36,15 @@ public final class PointInTime {
     }
 
     private final MassiveClient client;
+    private final Session session;
 
     public PointInTime(MassiveClient client) {
+        this(client, Session.EXTENDED);
+    }
+
+    public PointInTime(MassiveClient client, Session session) {
         this.client = client;
+        this.session = session;
     }
 
     /** Parses {@code MM/dd/yyyy-HH:mm} as a wall-clock time in New York. */
@@ -59,16 +66,9 @@ public final class PointInTime {
         }
         long formingBar = trade.get().minuteBarStartMs();
 
-        // Every session minute before the trade's own bar, from this day and the days before it,
-        // with empty minutes repeating the previous close.
+        // The in-session bars before the trade's own bar, from this day and the days before it.
         List<MinuteBar> history = client.minuteBars(symbol, date.minusDays(WARMUP_CALENDAR_DAYS), date);
-        List<MinuteBar> before = new ArrayList<>();
-        for (MinuteBar bar : history) {
-            if (bar.startMs() < formingBar) {
-                before.add(bar);
-            }
-        }
-        List<Double> closes = SessionMinutes.fillCloses(before, formingBar - SessionMinutes.MINUTE_MS);
+        List<Double> closes = session.closes(history, formingBar - Session.MINUTE_MS);
         if (closes.size() > LARGEST_WINDOW) {
             closes = new ArrayList<>(closes.subList(closes.size() - LARGEST_WINDOW, closes.size()));
         }

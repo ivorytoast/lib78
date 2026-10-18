@@ -20,6 +20,8 @@ public final class Fixture {
     public static final double MASSIVE_SMA20_AT_1211 = 12.708989999999998;
     public static final double MASSIVE_SMA50_AT_1211 = 12.750417999999993;
     public static final double MASSIVE_SMA200_AT_1211 = 12.936832499999959;
+    /** The 200 on the chart series (empty minutes skipped): the mean of the fixture's 200 real bars. */
+    public static final double CHART_SMA200_AT_1211 = 12.9370275;
     /** The 12:11 bar's close: the last close-updating trade in it, at 12:11:56.830. Odd lots at 12.685 followed. */
     public static final double CLOSE_1211 = 12.69;
 

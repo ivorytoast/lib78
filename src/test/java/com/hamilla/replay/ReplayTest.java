@@ -1,6 +1,7 @@
 package com.hamilla.replay;
 
 import com.hamilla.massive.MassiveClient;
+import com.hamilla.sma.Session;
 import com.hamilla.sma.Trend;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -75,10 +76,14 @@ class ReplayTest {
 
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         base = "http://127.0.0.1:" + server.getAddress().getPort();
-        // Previous day: a bar at 04:00 and at 19:59 only, both 10; the engine fills the rest.
-        server.createContext("/v2/aggs/ticker/RIVN/range/1/minute/", ex -> reply(ex, String.format(Locale.US,
-                "{\"results\":[{\"o\":10,\"h\":10,\"l\":10,\"c\":10,\"t\":%d},{\"o\":10,\"h\":10,\"l\":10,\"c\":10,\"t\":%d}]}",
-                T_0400 - DAY_MS, T_0400 - DAY_MS + 959 * 60_000L)));
+        // Previous day: a bar for every session minute, all at 10, plus a 20:00 bar that must be ignored.
+        server.createContext("/v2/aggs/ticker/RIVN/range/1/minute/", ex -> {
+            List<String> bars = new ArrayList<>();
+            for (int i = 0; i <= 960; i++) {
+                bars.add(String.format(Locale.US, "{\"o\":10,\"h\":10,\"l\":10,\"c\":10,\"t\":%d}", T_0400 - DAY_MS + i * 60_000L));
+            }
+            reply(ex, "{\"results\":[" + String.join(",", bars) + "]}");
+        });
         server.createContext("/v3/trades/RIVN", ex -> {
             List<String> trades = new ArrayList<>();
             trades.add(trade(T_0400 + 500, 99.0, true));                       // 04:00 odd lot, ignored
@@ -122,7 +127,7 @@ class ReplayTest {
     }
 
     @Test
-    void printsOneTrendPerMinuteFromNineFortyFiveToThreeFiftyNine() throws Exception {
+    void chartModePrintsOneTrendPerMinuteAndLeavesWindowsAloneOnEmptyMinutes() throws Exception {
         Replay replay = new Replay(client, new PrintStream(console, true, StandardCharsets.UTF_8));
 
         Replay.Result r = replay.run(new Replay.Options("RIVN", DAY, false, false, null));
@@ -137,11 +142,12 @@ class ReplayTest {
         assertEquals(Trend.NONE, r.signals().get(1).trend());
         // 09:47: 20=9.9 50=9.96 200=9.99, price 8 -> down
         assertEquals(Trend.DOWN, r.signals().get(2).trend());
-        // Filled minutes keep printing; once twenty 8s fill the 20 window the price equals it -> none.
+        // No trades until 16:00: every later minute repeats the 09:47 state, nothing rolls into the windows.
         assertEquals(Trend.DOWN, r.signals().get(10).trend());
-        assertEquals(Trend.NONE, r.signals().get(374).trend());
-        assertEquals(960, r.barsClosed());
-        assertEquals(960 - 19, r.barsFilled());
+        assertEquals(Trend.DOWN, r.signals().get(374).trend());
+        assertEquals(9.9, r.signals().get(374).atClose().sma20(), 1e-9);
+        assertEquals(19, r.barsClosed());                       // 09:30 .. 09:47 and 16:00
+        assertEquals(960 - 19, r.emptyMinutes());
         assertEquals(21, r.tradesSeen());
         assertEquals(19, r.tradesApplied());
         assertTrue(r.oracleChecks().isEmpty());
@@ -150,10 +156,24 @@ class ReplayTest {
         assertEquals("09:45 up", lines[0]);
         assertEquals("09:46 none", lines[1]);
         assertEquals("09:47 down", lines[2]);
-        assertEquals("15:59 none", lines[374]);
-        assertTrue(lines[375].startsWith("RIVN 2026-10-16: 375 minutes, up 1, down "), lines[375]);
+        assertEquals("15:59 down", lines[374]);
+        assertEquals("RIVN 2026-10-16: 375 minutes, up 1, down 373, none 1 (21 trades, 19 applied, 19 bars, 941 empty minutes)", lines[375]);
         assertEquals(376, lines.length);
         assertFalse(console.toString(StandardCharsets.UTF_8).contains("09:44"));
+    }
+
+    @Test
+    void regularSessionDropsPreMarketBarsFromTheWindows() throws Exception {
+        Replay replay = new Replay(client, new PrintStream(console, true, StandardCharsets.UTF_8));
+
+        Replay.Result r = replay.run(new Replay.Options("RIVN", DAY, Session.REGULAR, false, false, null));
+
+        // Same answers here because the previous day was flat at 10, but only 390 minutes per day exist
+        // and the 16:00 closing print falls outside the session.
+        assertEquals(375, r.signals().size());
+        assertEquals(Trend.UP, r.signals().get(0).trend());
+        assertEquals(18, r.barsClosed());
+        assertEquals(390 - 18, r.emptyMinutes());
     }
 
     @Test
@@ -173,6 +193,7 @@ class ReplayTest {
         String out = console.toString(StandardCharsets.UTF_8);
         assertTrue(out.contains("09:45 up    px=11.0000    sma20=10.0500    sma50=10.0200    sma200=10.0050"), out);
         assertTrue(out.contains("960/960  bars match"), out);
+        assertEquals(960, r.barsClosed());
         assertFalse(out.contains("FAIL"), out);
 
         List<String> lines = Files.readAllLines(csv);

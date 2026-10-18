@@ -1,16 +1,16 @@
-09:45 down
-09:46 down
-09:47 down
-09:48 down
-09:49 down
-09:50 down
-09:51 down
-09:52 down
-09:53 down
-09:54 down
-09:55 down
-09:56 down
-09:57 down
+09:45 none
+09:46 none
+09:47 none
+09:48 none
+09:49 none
+09:50 none
+09:51 none
+09:52 none
+09:53 none
+09:54 none
+09:55 none
+09:56 none
+09:57 none
 09:58 down
 09:59 down
 10:00 none
@@ -373,4 +373,4 @@
 15:57 down
 15:58 none
 15:59 none
-RIVN 2026-10-16: 375 minutes, up 0, down 262, none 113 (99,581 trades, 46,848 applied, 960 bars)
+RIVN 2026-10-16: 375 minutes, up 0, down 249, none 126 (99,581 trades, 46,848 applied, 648 bars, 312 empty minutes)

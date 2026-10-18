@@ -17,7 +17,7 @@ class MovingAveragesTest {
 
     @Test
     void matchesMassiveMinuteSmaOnFilledSeries() {
-        List<Double> prior = SessionMinutes.fillCloses(Fixture.rivnBarsBefore1211(), Fixture.BAR_1211 - SessionMinutes.MINUTE_MS);
+        List<Double> prior = Session.EXTENDED.fillCloses(Fixture.rivnBarsBefore1211(), Fixture.BAR_1211 - Session.MINUTE_MS);
         assertTrue(prior.size() >= 199, "need 199 filled minutes, got " + prior.size());
 
         MovingAverages engine = new MovingAverages("RIVN", prior);
@@ -29,20 +29,21 @@ class MovingAveragesTest {
     }
 
     @Test
-    void skippingEmptyMinutesWouldNotMatchMassiveFor200() {
-        // Sanity check on the fixture itself: the raw 199 bars reach back to 08:02 and give a different 200 value.
-        List<Double> raw = new ArrayList<>();
-        Fixture.rivnBarsBefore1211().forEach(b -> raw.add(b.close()));
-        MovingAverages engine = new MovingAverages("RIVN", raw);
+    void chartSeriesSkipsEmptyMinutesSoThe200ReachesFurtherBack() {
+        // The chart series uses the 199 real bars, which reach back to 08:02 instead of 08:52.
+        List<Double> chart = Session.EXTENDED.closes(Fixture.rivnBarsBefore1211(), Fixture.BAR_1211 - Session.MINUTE_MS);
+        assertEquals(199, chart.size());
+        MovingAverages engine = new MovingAverages("RIVN", chart);
         SmaSnapshot snap = engine.snapshotAt(0, Fixture.CLOSE_1211);
-        assertEquals(Fixture.MASSIVE_SMA20_AT_1211, snap.sma20(), TOLERANCE);
-        assertEquals(Fixture.MASSIVE_SMA50_AT_1211, snap.sma50(), TOLERANCE);
+        assertEquals(Fixture.MASSIVE_SMA20_AT_1211, snap.sma20(), TOLERANCE);   // no empty minutes in the last 20
+        assertEquals(Fixture.MASSIVE_SMA50_AT_1211, snap.sma50(), TOLERANCE);   // nor the last 50
+        assertEquals(Fixture.CHART_SMA200_AT_1211, snap.sma200(), TOLERANCE);
         assertTrue(Math.abs(snap.sma200() - Fixture.MASSIVE_SMA200_AT_1211) > 1e-4);
     }
 
     @Test
     void intradayValueMovesByPriceChangeOverWindow() {
-        List<Double> prior = SessionMinutes.fillCloses(Fixture.rivnBarsBefore1211(), Fixture.BAR_1211 - SessionMinutes.MINUTE_MS);
+        List<Double> prior = Session.EXTENDED.fillCloses(Fixture.rivnBarsBefore1211(), Fixture.BAR_1211 - Session.MINUTE_MS);
         MovingAverages engine = new MovingAverages("RIVN", prior);
 
         SmaSnapshot a = engine.snapshotAt(0, 12.60);
@@ -54,7 +55,7 @@ class MovingAveragesTest {
 
     @Test
     void closeBarRollsTheWindowForward() {
-        List<Double> prior = SessionMinutes.fillCloses(Fixture.rivnBarsBefore1211(), Fixture.BAR_1211 - SessionMinutes.MINUTE_MS);
+        List<Double> prior = Session.EXTENDED.fillCloses(Fixture.rivnBarsBefore1211(), Fixture.BAR_1211 - Session.MINUTE_MS);
         MovingAverages engine = new MovingAverages("RIVN", prior);
         engine.closeBar(Fixture.CLOSE_1211);
 

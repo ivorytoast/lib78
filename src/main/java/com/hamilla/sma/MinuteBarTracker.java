@@ -5,66 +5,82 @@ import com.hamilla.market.PriceEvent;
 import java.util.Optional;
 
 /**
- * Turns a stream of trades into the one-minute bar series the engine runs on. Trades that do not
- * update the close (odd lots and the like) are ignored entirely. When a trade arrives in a later
- * minute, the bar now forming is closed at its last updating price and rolled into the windows,
- * and every session minute skipped in between gets a bar repeating that close, exactly as
- * Massive's minute indicators do. Minutes outside 04:00 to 20:00 Eastern produce nothing.
+ * Turns a stream of trades into one-minute bars for the engine. Trades that do not update the
+ * close (odd lots and the like) or fall outside the {@link Session} are ignored entirely. When a
+ * trade arrives in a later minute, the bar now forming is closed at its last updating price and
+ * rolled into the windows.
+ *
+ * <p>Every session minute in between is reported to the listener as well, so a caller can print
+ * one line per minute. What such an empty minute does to the windows depends on the mode:
+ * in chart mode ({@code fillEmptyMinutes} false) it is not a bar and the windows are untouched,
+ * as charting platforms do; in filled mode it becomes a bar repeating the previous close, as
+ * Massive's minute indicators do.
  */
 public final class MinuteBarTracker {
 
-    /** Told about each bar once it has completed, with the averages as they stood at its close. */
+    /** Told about each session minute once it has ended, with the averages as they stood at that point. */
     @FunctionalInterface
     public interface BarListener {
-        /** @param filled true when the minute had no updating trade and repeats the previous close */
-        void barClosed(long barStartMs, double close, SmaSnapshot atClose, boolean filled);
+        /** @param empty true when the minute had no updating trade; its {@code close} is the previous one */
+        void barClosed(long barStartMs, double close, SmaSnapshot atClose, boolean empty);
     }
 
     private final MovingAverages engine;
+    private final Session session;
+    private final boolean fillEmptyMinutes;
     private final BarListener listener;
     private long currentBarStartMs = Long.MIN_VALUE;
+    private boolean seeded;
     private double lastClose = Double.NaN;
     private long lastTradeNanos;
     private SmaSnapshot lastSnapshot;
+    /** The averages at the close of the last bar rolled into the windows; what an empty minute shows in chart mode. */
+    private SmaSnapshot lastBarSnapshot;
     private long barsClosed;
-    private long barsFilled;
+    private long emptyMinutes;
 
-    public MinuteBarTracker(MovingAverages engine, BarListener listener) {
+    public MinuteBarTracker(MovingAverages engine, Session session, boolean fillEmptyMinutes, BarListener listener) {
         this.engine = engine;
-        this.listener = listener == null ? (b, c, s, f) -> { } : listener;
+        this.session = session;
+        this.fillEmptyMinutes = fillEmptyMinutes;
+        this.listener = listener == null ? (b, c, s, e) -> { } : listener;
     }
 
     /**
-     * Tells the tracker where the warm-up series ended, so session minutes between that bar and the
-     * first trade get bars repeating {@code close}. The bar itself must already be in the engine's windows.
+     * Rolls the last bar of the warm-up series into the windows and remembers where it ended, so
+     * session minutes between it and the first trade are reported (and, in filled mode, become
+     * bars). The engine must hold the warm-up closes before this bar, not this bar itself.
      */
     public void seed(long lastBarStartMs, double close) {
         currentBarStartMs = lastBarStartMs;
         lastClose = close;
         lastTradeNanos = lastBarStartMs * 1_000_000L;
+        lastBarSnapshot = engine.snapshotAt(lastTradeNanos, close);
+        engine.closeBar(close);
         seeded = true;
     }
 
-    private boolean seeded;
-
     /**
      * Feeds one trade. Returns the averages as of that trade, or empty if the trade does not
-     * update the close and so changed nothing.
+     * update the close or is outside the session, and so changed nothing.
      */
     public Optional<SmaSnapshot> onTrade(PriceEvent event) {
         if (!event.updatesClose()) {
             return Optional.empty();
         }
         long bar = event.minuteBarStartMs();
+        if (!session.contains(bar)) {
+            return Optional.empty();
+        }
         if (currentBarStartMs == Long.MIN_VALUE) {
             currentBarStartMs = bar;
         } else if (bar > currentBarStartMs) {
             if (seeded) {
-                seeded = false; // the seed bar is already in the windows; only fill after it
+                seeded = false; // the seed bar is already in the windows; only report what follows it
             } else {
-                closeCurrentBar(false);
+                closeCurrentBar();
             }
-            fillThrough(bar - SessionMinutes.MINUTE_MS);
+            emptyThrough(bar - Session.MINUTE_MS);
             currentBarStartMs = bar;
         }
         // A trade stamped earlier than the forming bar (out of order) is applied to the forming bar.
@@ -75,29 +91,31 @@ public final class MinuteBarTracker {
     }
 
     /**
-     * Closes the bar now forming and fills the rest of its session with repeats of its close,
-     * so the series ends at the 19:59 bar. Call once the day's stream has ended.
+     * Closes the bar now forming and reports the rest of its day's session as empty minutes,
+     * so the series ends at the session's last bar. Call once the day's stream has ended.
      */
     public void finishSession() {
         if (currentBarStartMs == Long.MIN_VALUE) {
             return;
         }
-        long end = SessionMinutes.lastBarOfSession(currentBarStartMs);
+        long end = session.lastBarOfDay(currentBarStartMs);
         if (seeded) {
             seeded = false;
         } else {
-            closeCurrentBar(false);
+            closeCurrentBar();
         }
-        fillThrough(end);
+        emptyThrough(end);
         currentBarStartMs = Long.MIN_VALUE;
     }
 
+    /** Bars rolled into the windows: real bars, plus empty minutes in filled mode. */
     public long barsClosed() {
         return barsClosed;
     }
 
-    public long barsFilled() {
-        return barsFilled;
+    /** Session minutes with no updating trade. */
+    public long emptyMinutes() {
+        return emptyMinutes;
     }
 
     /** The last trade's averages, or null before any updating trade. */
@@ -105,27 +123,40 @@ public final class MinuteBarTracker {
         return lastSnapshot;
     }
 
-    private void closeCurrentBar(boolean filled) {
+    private void closeCurrentBar() {
         if (Double.isNaN(lastClose)) {
             return;
         }
         SmaSnapshot atClose = engine.snapshotAt(lastTradeNanos, lastClose);
         engine.closeBar(lastClose);
+        lastBarSnapshot = atClose;
         barsClosed++;
-        if (filled) {
-            barsFilled++;
-        }
-        listener.barClosed(currentBarStartMs, atClose.price(), atClose, filled);
+        listener.barClosed(currentBarStartMs, lastClose, atClose, false);
     }
 
-    /** Emits a repeated-close bar for every session minute after the current bar up to {@code lastMs} inclusive. */
-    private void fillThrough(long lastMs) {
-        for (long m = currentBarStartMs + SessionMinutes.MINUTE_MS; m <= lastMs; m += SessionMinutes.MINUTE_MS) {
-            if (!SessionMinutes.inSession(m)) {
+    /** Reports every session minute after the current bar up to {@code lastMs} inclusive as empty. */
+    private void emptyThrough(long lastMs) {
+        if (Double.isNaN(lastClose)) {
+            return;
+        }
+        for (long m = currentBarStartMs + Session.MINUTE_MS; m <= lastMs; m += Session.MINUTE_MS) {
+            if (!session.contains(m)) {
                 continue;
             }
             currentBarStartMs = m;
-            closeCurrentBar(true);
+            emptyMinutes++;
+            SmaSnapshot state;
+            if (fillEmptyMinutes) {
+                // The empty minute is a bar closing at the previous close; report it as it closes, then roll it in.
+                state = engine.snapshotAt(lastTradeNanos, lastClose);
+                engine.closeBar(lastClose);
+                lastBarSnapshot = state;
+                barsClosed++;
+            } else {
+                // No bar: the chart still shows the last real bar's values.
+                state = lastBarSnapshot;
+            }
+            listener.barClosed(m, lastClose, state, true);
         }
     }
 }

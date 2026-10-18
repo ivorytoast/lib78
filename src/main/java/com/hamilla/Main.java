@@ -5,6 +5,7 @@ import com.hamilla.massive.MassiveClient;
 import com.hamilla.query.PointInTime;
 import com.hamilla.replay.Replay;
 import com.hamilla.replay.TradingCalendar;
+import com.hamilla.sma.Session;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -30,11 +31,14 @@ public final class Main {
             at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),
                     using the last trade at or before that minute. Example: at SPY 10/16/2026-12:12
 
-            replay options:
-              --verbose     append price and the three averages to each printed minute
-              --verify      also compare every completed bar with Massive's own minute SMA endpoint
-              --csv <path>  write every close-updating trade and its SMA values to a CSV file
-                            (with several tickers, the ticker is inserted before the extension)
+            options:
+              --session <HH:MM-HH:MM>  daily window of bars the averages run on, Eastern time
+                                       (default 04:00-20:00; a minute with no trade has no bar)
+              --verbose     replay: append price and the three averages to each printed minute
+              --verify      replay: run on Massive's filled 04:00-20:00 series instead and compare
+                            every completed bar with Massive's own minute SMA endpoint
+              --csv <path>  replay: write every close-updating trade and its SMA values to a CSV
+                            file (with several tickers, the ticker is inserted before the extension)
 
             environment:
               MASSIVE_API_KEY          required
@@ -54,8 +58,24 @@ public final class Main {
             }
         }
 
+        Session session = Session.EXTENDED;
+        List<String> rest = new ArrayList<>();
+        for (int i = 2; i < args.length; i++) {
+            if (args[i].equals("--session")) {
+                try {
+                    session = Session.parse(requireValue(args, ++i));
+                } catch (IllegalArgumentException e) {
+                    System.err.println("error: " + e.getMessage());
+                    System.exit(2);
+                }
+            } else {
+                rest.add(args[i]);
+            }
+        }
+        args = concat(args[0], args[1], rest);
+
         if (args[0].equals("at")) {
-            System.exit(at(symbols, args));
+            System.exit(at(symbols, session, args));
         }
         LocalDate date = null;
         boolean verbose = false;
@@ -90,13 +110,23 @@ public final class Main {
             LocalDate day = date != null ? date
                     : TradingCalendar.previousTradingDay(client, symbol, LocalDate.now(PriceEvent.EASTERN));
             Path csvFor = csvFor(csv, symbol, symbols.size() > 1);
-            Replay.Result result = replay.run(new Replay.Options(symbol, day, verbose, verify, csvFor));
+            Replay.Result result = replay.run(new Replay.Options(symbol, day, session, verbose, verify, csvFor));
             allPass &= result.allOraclesPass();
         }
         System.exit(allPass ? 0 : 1);
     }
 
-    private static int at(List<String> symbols, String[] args) throws Exception {
+    private static String[] concat(String a, String b, List<String> rest) {
+        String[] out = new String[rest.size() + 2];
+        out[0] = a;
+        out[1] = b;
+        for (int i = 0; i < rest.size(); i++) {
+            out[i + 2] = rest.get(i);
+        }
+        return out;
+    }
+
+    private static int at(List<String> symbols, Session session, String[] args) throws Exception {
         if (args.length != 3) {
             System.err.println("at needs exactly one time, e.g. at SPY 10/16/2026-12:12");
             return 2;
@@ -108,7 +138,7 @@ public final class Main {
             System.err.println("error: " + e.getMessage());
             return 2;
         }
-        PointInTime query = new PointInTime(clientOrExit());
+        PointInTime query = new PointInTime(clientOrExit(), session);
         int failures = 0;
         for (String symbol : symbols) {
             try {

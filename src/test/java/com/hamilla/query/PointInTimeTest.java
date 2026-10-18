@@ -3,6 +3,7 @@ package com.hamilla.query;
 import com.hamilla.market.MinuteBar;
 import com.hamilla.massive.MassiveClient;
 import com.hamilla.sma.Fixture;
+import com.hamilla.sma.Session;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -84,18 +85,28 @@ class PointInTimeTest {
 
         assertEquals(12.69, a.trade().price());
         assertEquals(1792167116830639117L, a.trade().sipTimestampNanos());
-        assertEquals(200, a.barsLoaded());
+        assertEquals(199, a.barsLoaded());
         assertEquals(Fixture.MASSIVE_SMA20_AT_1211, a.snapshot().sma20(), 1e-9);
         assertEquals(Fixture.MASSIVE_SMA50_AT_1211, a.snapshot().sma50(), 1e-9);
-        assertEquals(Fixture.MASSIVE_SMA200_AT_1211, a.snapshot().sma200(), 1e-9);
+        assertEquals(Fixture.CHART_SMA200_AT_1211, a.snapshot().sma200(), 1e-9);
 
         String[] lines = PointInTime.format(a).split("\\R");
-        assertEquals("RIVN 10/16/2026-12:12 ET (last trade 12:11:56.830, 200 prior bars)", lines[0]);
+        assertEquals("RIVN 10/16/2026-12:12 ET (last trade 12:11:56.830, 199 prior bars)", lines[0]);
         assertEquals("Price: 12.69", lines[1]);
         assertEquals("20: 12.71", lines[2]);
         assertEquals("50: 12.75", lines[3]);
         assertEquals("200: 12.94", lines[4]);
         assertEquals(5, lines.length);
+    }
+
+    @Test
+    void sessionLimitsTheBarsUsed() throws Exception {
+        // Regular hours only: the bars before 09:30 drop out and the 200 is not yet available at 12:11.
+        PointInTime.Answer a = new PointInTime(client, Session.REGULAR).lookup("RIVN", PointInTime.parse("10/16/2026-12:12"));
+        assertEquals(161, a.barsLoaded()); // 09:30 .. 12:10
+        assertEquals(Fixture.MASSIVE_SMA20_AT_1211, a.snapshot().sma20(), 1e-9);
+        assertTrue(Double.isNaN(a.snapshot().sma200()));
+        assertTrue(PointInTime.format(a).endsWith("200: n/a\n"), PointInTime.format(a));
     }
 
     @Test
