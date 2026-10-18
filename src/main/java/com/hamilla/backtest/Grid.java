@@ -44,11 +44,11 @@ public final class Grid {
     }
 
     public record Result(String symbol, List<Double> stops, List<Double> targets, double[][] pnl,
-                         BracketSimulator.Summary[][] cells, double typicalRange, int signals, Sizing sizing,
+                         BracketSimulator.Summary[][] cells, double typicalRange, int signals, Sizing sizing, double referencePrice,
                          Recommendation recommendation, List<TimeBucket> byTime) {
-        /** Shares used for trades in the row with this stop. */
+        /** Shares for a trade in the row with this stop, at the average signal price when a position cap applies. */
         public int shares(double stop) {
-            return sizing.sharesFor(stop);
+            return sizing.sharesFor(stop, referencePrice);
         }
     }
 
@@ -71,11 +71,11 @@ public final class Grid {
     /** Several months: per-month tables plus their aggregate. */
     public record MultiResult(String symbol, List<YearMonth> months, List<Double> stops, List<Double> targets,
                               BracketSimulator.Summary[][][] cells, double[][] total, double[][] worstMonth,
-                              int[][] monthsPositive, double typicalRange, int signals, Sizing sizing,
+                              int[][] monthsPositive, double typicalRange, int signals, Sizing sizing, double referencePrice,
                               Recommendation recommendation, Map<YearMonth, Double> recommendedByMonth,
                               List<TimeBucket> byTime, List<CellDetail> shown) {
         public int shares(double stop) {
-            return sizing.sharesFor(stop);
+            return sizing.sharesFor(stop, referencePrice);
         }
     }
 
@@ -110,6 +110,15 @@ public final class Grid {
         return n == 0 ? Double.NaN : sum / n;
     }
 
+    /** Average signal price, the price a capped share count is quoted at. */
+    static double referencePrice(List<TradeSignal> signals) {
+        double sum = 0;
+        for (TradeSignal s : signals) {
+            sum += s.price();
+        }
+        return signals.isEmpty() ? Double.NaN : sum / signals.size();
+    }
+
     /** Rounds a dollar amount to a sensible tick: cents under $1, five cents under $10, else a quarter. */
     static double nice(double dollars) {
         double tick = dollars < 1 ? 0.01 : dollars < 10 ? 0.05 : 0.25;
@@ -139,16 +148,15 @@ public final class Grid {
         double[][] pnl = new double[stops.size()][targets.size()];
         BracketSimulator.Summary[][] cells = new BracketSimulator.Summary[stops.size()][targets.size()];
         for (int i = 0; i < stops.size(); i++) {
-            int shares = sizing.sharesFor(stops.get(i));
             for (int j = 0; j < targets.size(); j++) {
-                cells[i][j] = simulator.summarize(signals, stops.get(i), targets.get(j), shares);
+                cells[i][j] = simulator.summarize(signals, stops.get(i), targets.get(j), sizing);
                 pnl[i][j] = cells[i][j].pnl();
             }
         }
         Recommendation rec = recommend(stops, targets, pnl, (i, j) -> cells[i][j]);
         List<TimeBucket> byTime = rec == null ? List.of()
-                : byTime(simulator.simulate(signals, rec.stop(), rec.target(), sizing.sharesFor(rec.stop())), window);
-        return new Result(symbol, stops, targets, pnl, cells, typicalRange, signals.size(), sizing, rec, byTime);
+                : byTime(simulator.simulate(signals, rec.stop(), rec.target(), sizing), window);
+        return new Result(symbol, stops, targets, pnl, cells, typicalRange, signals.size(), sizing, referencePrice(signals), rec, byTime);
     }
 
     public MultiResult runMonths(String symbol, Map<YearMonth, List<TradeSignal>> signalsByMonth, List<Double> stops,
@@ -180,9 +188,8 @@ public final class Grid {
             List<TradeSignal> signals = signalsByMonth.get(months.get(m));
             all.addAll(signals);
             for (int i = 0; i < rows; i++) {
-                int shares = sizing.sharesFor(stops.get(i));
                 for (int j = 0; j < cols; j++) {
-                    cells[m][i][j] = simulator.summarize(signals, stops.get(i), targets.get(j), shares);
+                    cells[m][i][j] = simulator.summarize(signals, stops.get(i), targets.get(j), sizing);
                 }
             }
         }
@@ -218,9 +225,8 @@ public final class Grid {
         }
         BracketSimulator.Summary[][] combined = new BracketSimulator.Summary[rows][cols];
         for (int i = 0; i < rows; i++) {
-            int shares = sizing.sharesFor(stops.get(i));
             for (int j = 0; j < cols; j++) {
-                combined[i][j] = simulator.summarize(all, stops.get(i), targets.get(j), shares);
+                combined[i][j] = simulator.summarize(all, stops.get(i), targets.get(j), sizing);
             }
         }
         Recommendation rec = recommend(stops, targets, score, (i, j) -> combined[i][j]);
@@ -232,20 +238,19 @@ public final class Grid {
             for (int m = 0; m < months.size(); m++) {
                 recByMonth.put(months.get(m), cells[m][ri][rj].pnl());
             }
-            byTime = byTime(simulator.simulate(all, rec.stop(), rec.target(), sizing.sharesFor(rec.stop())), window);
+            byTime = byTime(simulator.simulate(all, rec.stop(), rec.target(), sizing), window);
         }
         List<CellDetail> shown = new ArrayList<>();
         for (double[] pair : show) {
-            int shares = sizing.sharesFor(pair[0]);
             Map<YearMonth, Double> byMonth = new LinkedHashMap<>();
             for (YearMonth m : months) {
-                byMonth.put(m, simulator.summarize(signalsByMonth.get(m), pair[0], pair[1], shares).pnl());
+                byMonth.put(m, simulator.summarize(signalsByMonth.get(m), pair[0], pair[1], sizing).pnl());
             }
-            shown.add(new CellDetail(pair[0], pair[1], simulator.summarize(all, pair[0], pair[1], shares), byMonth,
-                    byTime(simulator.simulate(all, pair[0], pair[1], shares), window)));
+            shown.add(new CellDetail(pair[0], pair[1], simulator.summarize(all, pair[0], pair[1], sizing), byMonth,
+                    byTime(simulator.simulate(all, pair[0], pair[1], sizing), window)));
         }
         return new MultiResult(symbol, months, stops, targets, cells, total, worst, positive, typicalRange,
-                all.size(), sizing, rec, recByMonth, byTime, shown);
+                all.size(), sizing, referencePrice(all), rec, recByMonth, byTime, shown);
     }
 
     interface CellLookup {
@@ -320,7 +325,7 @@ public final class Grid {
 
     public static void print(Result r, PrintStream out) {
         out.printf(Locale.US, "%s: %d signals, %s, typical regular-hours minute range %s%n%n",
-                r.symbol(), r.signals(), sizingText(r.sizing(), r.stops()), money(r.typicalRange()));
+                r.symbol(), r.signals(), sizingText(r.sizing(), r.stops(), r.referencePrice()), money(r.typicalRange()));
         table(out, "total P&L", r.stops(), r.targets(), (i, j) -> String.format(Locale.US, "%,.0f", r.pnl()[i][j]));
 
         Recommendation rec = r.recommendation();
@@ -350,7 +355,7 @@ public final class Grid {
     public static void print(MultiResult r, PrintStream out) {
         int n = r.months().size();
         out.printf(Locale.US, "%s %s to %s: %d months, %d signals, %s, levels from typical minute range %s%n%n",
-                r.symbol(), r.months().get(0), r.months().get(n - 1), n, r.signals(), sizingText(r.sizing(), r.stops()), money(r.typicalRange()));
+                r.symbol(), r.months().get(0), r.months().get(n - 1), n, r.signals(), sizingText(r.sizing(), r.stops(), r.referencePrice()), money(r.typicalRange()));
         table(out, "total P&L over all months", r.stops(), r.targets(), (i, j) -> String.format(Locale.US, "%,.0f", r.total()[i][j]));
         table(out, "worst month", r.stops(), r.targets(), (i, j) -> String.format(Locale.US, "%,.0f", r.worstMonth()[i][j]));
         table(out, "months positive (of " + n + ")", r.stops(), r.targets(), (i, j) -> Integer.toString(r.monthsPositive()[i][j]));
@@ -470,14 +475,26 @@ public final class Grid {
         out.println();
     }
 
-    /** "2000 shares per trade", or the risk budget and the share count it implies for each stop. */
-    static String sizingText(Sizing sizing, List<Double> stops) {
-        if (!sizing.byRisk()) {
+    /**
+     * "2000 shares per trade", or the risk budget and the share count it implies for each stop; with a position
+     * cap, the cap and the counts it allows at the average signal price.
+     */
+    static String sizingText(Sizing sizing, List<Double> stops, double referencePrice) {
+        if (!sizing.byRisk() && !sizing.capped()) {
             return sizing.fixedShares() + " shares per trade";
         }
-        StringBuilder sb = new StringBuilder(String.format(Locale.US, "%,.0f risked per trade (shares by stop:", sizing.riskDollars()));
+        StringBuilder sb = new StringBuilder();
+        if (sizing.byRisk()) {
+            sb.append(String.format(Locale.US, "%,.0f risked per trade", sizing.riskDollars()));
+        } else {
+            sb.append(sizing.fixedShares()).append(" shares per trade");
+        }
+        if (sizing.capped()) {
+            sb.append(String.format(Locale.US, ", at most %,.0f per position", sizing.capDollars()));
+        }
+        sb.append(sizing.capped() ? String.format(Locale.US, " (shares by stop at ~%.2f:", referencePrice) : " (shares by stop:");
         for (double stop : stops) {
-            sb.append(' ').append(level(stop)).append('\u2192').append(sizing.sharesFor(stop));
+            sb.append(' ').append(level(stop)).append('\u2192').append(sizing.sharesFor(stop, referencePrice));
         }
         return sb.append(')').toString();
     }

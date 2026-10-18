@@ -193,6 +193,12 @@ a fixed share count, so a stopped trade loses about $380 in every cell and the
 table compares brackets at equal risk; the header lists the share count each
 stop implies. Rows with no stop fall back to the fixed size.
 
+`--cap 50000` never puts more than $50,000 in one position: each trade buys
+the smaller of its risk-sized count and the cap divided by its own entry price,
+so a high-priced stock with a tight stop risks less than the budget rather than
+breaching the cap. The header quotes the resulting counts at the average signal
+price. Works with `--risk` or `--shares`.
+
 Options: `--shares N` (default: the symbol's configured size in
 `SymbolSettings`, else 100), `--stops 0.05,0.10,none` and
 `--targets 0.10,0.20,none` to test your own levels (defaults are multiples of

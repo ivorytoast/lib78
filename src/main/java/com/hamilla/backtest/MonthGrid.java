@@ -36,11 +36,17 @@ public final class MonthGrid {
      * @param cooldown  signal cooldown in minutes
      * @param shares    shares per trade (0 means the symbol's configured default)
      * @param risk      dollars risked per trade; when positive, shares are risk divided by the stop
+     * @param cap       most dollars in one position; when positive, shares are also limited to cap divided by the entry price
      * @param stops     explicit stop levels, or null for defaults built from the typical minute range
      * @param targets   explicit target levels, or null for defaults
      */
     public record Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
-                          int cooldown, int shares, double risk, List<Double> stops, List<Double> targets, List<double[]> show) {
+                          int cooldown, int shares, double risk, double cap, List<Double> stops, List<Double> targets, List<double[]> show) {
+        public Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
+                       int cooldown, int shares, double risk, List<Double> stops, List<Double> targets, List<double[]> show) {
+            this(symbol, month, toMonth, session, window, cooldown, shares, risk, 0, stops, targets, show);
+        }
+
         public Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
                        int cooldown, int shares, List<Double> stops, List<Double> targets, List<double[]> show) {
             this(symbol, month, toMonth, session, window, cooldown, shares, 0, stops, targets, show);
@@ -173,7 +179,7 @@ public final class MonthGrid {
         List<Double> stops = opts.stops() != null ? opts.stops() : Grid.defaultLevels(Grid.STOP_MULTIPLES, range);
         List<Double> targets = opts.targets() != null ? opts.targets() : Grid.defaultLevels(Grid.TARGET_MULTIPLES, range);
         int shares = opts.shares() > 0 ? opts.shares() : SymbolSettings.shares(opts.symbol());
-        Sizing sizing = opts.risk() > 0 ? Sizing.risk(opts.risk(), shares) : Sizing.shares(shares);
+        Sizing sizing = (opts.risk() > 0 ? Sizing.risk(opts.risk(), shares) : Sizing.shares(shares)).cappedAt(opts.cap());
         Grid grid = new Grid(new BracketSimulator(bars), opts.window());
 
         if (!opts.isRange()) {

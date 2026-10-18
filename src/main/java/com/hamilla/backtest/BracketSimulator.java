@@ -60,8 +60,13 @@ public final class BracketSimulator {
         }
     }
 
-    /** Runs every signal with the given brackets. */
+    /** Runs every signal with the given brackets and a fixed share count. */
     public List<Trade> simulate(List<TradeSignal> signals, double stop, double target, int shares) {
+        return simulate(signals, stop, target, Sizing.shares(shares));
+    }
+
+    /** Runs every signal with the given brackets, sizing each trade at its own entry price. */
+    public List<Trade> simulate(List<TradeSignal> signals, double stop, double target, Sizing sizing) {
         List<Trade> trades = new ArrayList<>();
         for (TradeSignal s : signals) {
             LocalDate day = s.date();
@@ -91,14 +96,18 @@ public final class BracketSimulator {
                     break;
                 }
             }
-            double pnl = (s.isLong() ? exitPx - s.price() : s.price() - exitPx) * shares;
+            double pnl = (s.isLong() ? exitPx - s.price() : s.price() - exitPx) * sizing.sharesFor(stop, s.price());
             trades.add(new Trade(s, outcome, exitAt, exitPx, pnl));
         }
         return trades;
     }
 
     public Summary summarize(List<TradeSignal> signals, double stop, double target, int shares) {
-        List<Trade> trades = simulate(signals, stop, target, shares);
+        return summarize(signals, stop, target, Sizing.shares(shares));
+    }
+
+    public Summary summarize(List<TradeSignal> signals, double stop, double target, Sizing sizing) {
+        List<Trade> trades = simulate(signals, stop, target, sizing);
         double total = 0;
         double worst = 0;
         int t = 0;

@@ -166,6 +166,34 @@ class GridTest {
     }
 
     @Test
+    void positionCapLimitsSharesAtEachTradesOwnPrice() {
+        List<MinuteBar> bars = Bars.rivnOct15and16();
+        Set<LocalDate> days = Set.of(LocalDate.of(2026, 10, 16));
+        List<TradeSignal> signals = new SignalGenerator(Session.EXTENDED, 6).generate("RIVN", bars, days);
+
+        // 380 / 0.08 = 4,750 shares, but 10,000 dollars buys only about 775 at RIVN's 12.5 to 13 prices.
+        Grid.Result r = new Grid(new BracketSimulator(bars)).run("RIVN", signals,
+                List.of(0.08, 0.19), List.of(0.12, 0.25), 0.02, Sizing.risk(380, 2000).cappedAt(10_000));
+
+        assertEquals(4750, r.sizing().sharesFor(0.08));
+        int atAverage = (int) Math.floor(10_000 / r.referencePrice());
+        assertEquals(atAverage, r.shares(0.08));
+        assertTrue(atAverage > 700 && atAverage < 800, "shares at the average price: " + atAverage);
+        // Each trade is sized at its own entry: the sum of per-trade share counts, not one count for the row.
+        double expected = 0;
+        for (BracketSimulator.Trade t : new BracketSimulator(bars).simulate(signals, 0.08, 0.12, 1)) {
+            expected += t.pnl() * (int) Math.floor(10_000 / t.signal().price() + 1e-9);
+        }
+        assertEquals(expected, r.pnl()[0][0], 1e-6);
+        assertTrue(r.pnl()[0][0] < 11 * 0.12 * 4750 - 0.08 * 4750);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Grid.print(r, new PrintStream(out, true, StandardCharsets.UTF_8));
+        String text = out.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("380 risked per trade, at most 10,000 per position (shares by stop at ~"), text);
+        assertTrue(text.contains("0.08\u2192" + atAverage + " 0.19\u2192" + atAverage + ")"), text);
+    }
+
+    @Test
     void defaultLevelsScaleWithTheMinuteRangeAndRoundToTicks() {
         assertEquals(List.of(0.03, 0.05, 0.06, 0.09, 0.12, 0.18, BracketSimulator.NONE), Grid.defaultLevels(Grid.STOP_MULTIPLES, 0.03));
         assertEquals(List.of(0.5, 0.75, 1.0, 1.5, 2.0, 3.0, BracketSimulator.NONE), Grid.defaultLevels(Grid.STOP_MULTIPLES, 0.5));
