@@ -26,10 +26,16 @@ import java.util.Set;
 public final class SignalGenerator {
 
     private final Session session;
+    private final SignalWindow window;
     private final int cooldownMinutes;
 
     public SignalGenerator(Session session, int cooldownMinutes) {
+        this(session, SignalWindow.DEFAULT, cooldownMinutes);
+    }
+
+    public SignalGenerator(Session session, SignalWindow window, int cooldownMinutes) {
         this.session = session;
+        this.window = window;
         this.cooldownMinutes = cooldownMinutes;
     }
 
@@ -51,7 +57,7 @@ public final class SignalGenerator {
                 current[0] = day;
                 cooldown.reset();
             }
-            if (!SignalWindow.contains(barStartMs) || !dates.contains(day)) {
+            if (!window.contains(barStartMs) || !dates.contains(day)) {
                 return;
             }
             Optional<Action> action = Action.of(atClose);

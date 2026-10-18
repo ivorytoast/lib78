@@ -34,7 +34,7 @@ import java.util.TreeMap;
 
 /**
  * Replays one past trading day for one symbol, trade by trade, on the one-minute bar series.
- * Directly after each minute closes, from 10:30 to 14:30 Eastern, it classifies the 20/50/200
+ * Directly after each minute closes, inside the {@link SignalWindow} (10:30 to 14:30 by default), it classifies the 20/50/200
  * alignment and price as "up", "down" or "none" and prints the minute when that gives an entry
  * signal: "BUY LONG" in the up zone with the price within two cents above the 20, "SHORT SELL" in
  * the down zone with the price within two cents below it, followed by the price and, for symbols
@@ -63,12 +63,13 @@ public final class Replay {
      * @param symbol          ticker to replay
      * @param date            trading day to replay
      * @param session         daily window of bars the averages run on (ignored with {@code verify})
+     * @param window          minutes whose closes may print a signal
      * @param cooldownMinutes after a signal prints, no signal prints until this many minutes have passed (0 = none)
      * @param verbose         print every minute with its zone, signal, price and averages
      * @param verify          run on Massive's filled series and compare every bar with its minute SMA endpoint
      * @param csvOut          optional path to write one row per close-updating trade
      */
-    public record Options(String symbol, LocalDate date, Session session, int cooldownMinutes,
+    public record Options(String symbol, LocalDate date, Session session, SignalWindow window, int cooldownMinutes,
                           boolean verbose, boolean verify, Path csvOut) {
         public Options {
             if (cooldownMinutes < 0) {
@@ -77,11 +78,16 @@ public final class Replay {
         }
 
         public Options(String symbol, LocalDate date, boolean verbose, boolean verify, Path csvOut) {
-            this(symbol, date, Session.EXTENDED, DEFAULT_COOLDOWN_MINUTES, verbose, verify, csvOut);
+            this(symbol, date, Session.EXTENDED, SignalWindow.DEFAULT, DEFAULT_COOLDOWN_MINUTES, verbose, verify, csvOut);
         }
 
         public Options(String symbol, LocalDate date, Session session, boolean verbose, boolean verify, Path csvOut) {
-            this(symbol, date, session, DEFAULT_COOLDOWN_MINUTES, verbose, verify, csvOut);
+            this(symbol, date, session, SignalWindow.DEFAULT, DEFAULT_COOLDOWN_MINUTES, verbose, verify, csvOut);
+        }
+
+        public Options(String symbol, LocalDate date, Session session, int cooldownMinutes,
+                       boolean verbose, boolean verify, Path csvOut) {
+            this(symbol, date, session, SignalWindow.DEFAULT, cooldownMinutes, verbose, verify, csvOut);
         }
 
         /** The series actually used: Massive's filled extended session when verifying, else the chart series. */
@@ -256,8 +262,8 @@ public final class Replay {
         return Instant.ofEpochMilli(startMs).atZone(PriceEvent.EASTERN).format(BAR_TIME);
     }
 
-    private static boolean printed(long barStartMs) {
-        return SignalWindow.contains(barStartMs);
+    private static boolean printed(Options opts, long barStartMs) {
+        return opts.window().contains(barStartMs);
     }
 
     /** Feeds trades to the tracker, prints each minute's trend, checks bars against Massive, and optionally writes a CSV. */
@@ -310,7 +316,7 @@ public final class Replay {
 
         @Override
         public void barClosed(long barStartMs, double close, SmaSnapshot atClose, boolean empty) {
-            if (printed(barStartMs)) {
+            if (printed(opts, barStartMs)) {
                 Trend trend = Trend.of(atClose);
                 Optional<Action> action = Action.of(atClose);
                 boolean print = action.isPresent()

@@ -34,12 +34,10 @@ public final class Grid {
     /** Target sizes as multiples of the typical one-minute range. */
     static final double[] TARGET_MULTIPLES = {1.5, 2, 3, 4, 6, 8};
 
-    /** Entry-time buckets for the time-of-day breakdown: hourly from the first acted-on minute to the last. */
-    static final LocalTime[] BUCKET_STARTS = bucketStarts();
-
-    private static LocalTime[] bucketStarts() {
+    /** Entry-time buckets for the time-of-day breakdown: hourly from the window's first acted-on minute to its last. */
+    static LocalTime[] bucketStarts(SignalWindow window) {
         List<LocalTime> starts = new ArrayList<>();
-        for (LocalTime t = SignalWindow.FIRST; !t.isAfter(SignalWindow.LAST); t = t.plusHours(1)) {
+        for (LocalTime t = window.open(); !t.isAfter(window.last()); t = t.plusHours(1)) {
             starts.add(t);
         }
         return starts.toArray(new LocalTime[0]);
@@ -80,9 +78,15 @@ public final class Grid {
     }
 
     private final BracketSimulator simulator;
+    private final SignalWindow window;
 
     public Grid(BracketSimulator simulator) {
+        this(simulator, SignalWindow.DEFAULT);
+    }
+
+    public Grid(BracketSimulator simulator, SignalWindow window) {
         this.simulator = simulator;
+        this.window = window;
     }
 
     /** Average high-minus-low of regular-session bars, the unit the default grid levels are built from. */
@@ -129,7 +133,7 @@ public final class Grid {
             }
         }
         Recommendation rec = recommend(stops, targets, pnl, (i, j) -> cells[i][j]);
-        List<TimeBucket> byTime = rec == null ? List.of() : byTime(simulator.simulate(signals, rec.stop(), rec.target(), shares));
+        List<TimeBucket> byTime = rec == null ? List.of() : byTime(simulator.simulate(signals, rec.stop(), rec.target(), shares), window);
         return new Result(symbol, stops, targets, pnl, cells, typicalRange, signals.size(), shares, rec, byTime);
     }
 
@@ -207,7 +211,7 @@ public final class Grid {
             for (int m = 0; m < months.size(); m++) {
                 recByMonth.put(months.get(m), cells[m][ri][rj].pnl());
             }
-            byTime = byTime(simulator.simulate(all, rec.stop(), rec.target(), shares));
+            byTime = byTime(simulator.simulate(all, rec.stop(), rec.target(), shares), window);
         }
         List<CellDetail> shown = new ArrayList<>();
         for (double[] pair : show) {
@@ -216,7 +220,7 @@ public final class Grid {
                 byMonth.put(m, simulator.summarize(signalsByMonth.get(m), pair[0], pair[1], shares).pnl());
             }
             shown.add(new CellDetail(pair[0], pair[1], simulator.summarize(all, pair[0], pair[1], shares), byMonth,
-                    byTime(simulator.simulate(all, pair[0], pair[1], shares))));
+                    byTime(simulator.simulate(all, pair[0], pair[1], shares), window)));
         }
         return new MultiResult(symbol, months, stops, targets, cells, total, worst, positive, typicalRange,
                 all.size(), shares, rec, recByMonth, byTime, shown);
@@ -258,8 +262,9 @@ public final class Grid {
         return best;
     }
 
-    /** Groups trades by entry time into the standard buckets. */
-    static List<TimeBucket> byTime(List<BracketSimulator.Trade> trades) {
+    /** Groups trades by entry time into hourly buckets across the window. */
+    static List<TimeBucket> byTime(List<BracketSimulator.Trade> trades, SignalWindow window) {
+        LocalTime[] BUCKET_STARTS = bucketStarts(window);
         int n = BUCKET_STARTS.length;
         int[] count = new int[n];
         int[] t = new int[n];
@@ -283,7 +288,7 @@ public final class Grid {
             }
         }
         List<TimeBucket> buckets = new ArrayList<>();
-        LocalTime lastEntry = SignalWindow.LAST.isBefore(BracketSimulator.LAST_ENTRY) ? SignalWindow.LAST : BracketSimulator.LAST_ENTRY.minusMinutes(1);
+        LocalTime lastEntry = window.last().isBefore(BracketSimulator.LAST_ENTRY) ? window.last() : BracketSimulator.LAST_ENTRY.minusMinutes(1);
         for (int b = 0; b < n; b++) {
             LocalTime end = b + 1 < n ? BUCKET_STARTS[b + 1].minusMinutes(1) : lastEntry;
             buckets.add(new TimeBucket(BUCKET_STARTS[b] + "-" + end, count[b], t[b], s[b], h[b], pnl[b]));

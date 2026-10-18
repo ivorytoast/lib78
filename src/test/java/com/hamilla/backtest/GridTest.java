@@ -126,7 +126,7 @@ class GridTest {
                 new BracketSimulator.Trade(early, BracketSimulator.Outcome.TARGET, 0, 0, 20),
                 new BracketSimulator.Trade(noon, BracketSimulator.Outcome.STOP, 0, 0, -10),
                 new BracketSimulator.Trade(late, BracketSimulator.Outcome.HELD, 0, 0, 5));
-        List<Grid.TimeBucket> buckets = Grid.byTime(trades);
+        List<Grid.TimeBucket> buckets = Grid.byTime(trades, com.hamilla.sma.SignalWindow.DEFAULT);
         assertEquals(4, buckets.size());
         assertEquals("10:30-11:29", buckets.get(0).label());
         assertEquals(1, buckets.get(0).targets());
@@ -136,6 +136,10 @@ class GridTest {
         assertEquals("13:30-14:29", buckets.get(3).label());
         assertEquals(1, buckets.get(3).held());
         assertEquals(0, buckets.get(2).trades());
+
+        List<Grid.TimeBucket> morning = Grid.byTime(List.of(trades.get(0)), com.hamilla.sma.SignalWindow.parse("10:30-12:30"));
+        assertEquals(2, morning.size());
+        assertEquals("11:30-12:29", morning.get(1).label());
     }
 
     @Test

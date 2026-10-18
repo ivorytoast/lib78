@@ -72,7 +72,8 @@ java -jar target/lib78.jar replay SPY,QQQ,IWM --verbose --verify --csv out.csv
 With no date the most recent completed trading day is replayed. The run loads
 the previous week of minute bars so the 200 bar window is full from the first
 trade, then streams every trade of the day in time order. Directly after each
-minute closes, from 10:30 to 14:30 Eastern, it classifies the minute:
+minute closes, inside the signal window (10:30 to 14:30 Eastern by default,
+`--window` changes it), it classifies the minute:
 
 | zone | meaning |
 |---|---|
@@ -116,6 +117,9 @@ Options:
 - `--session HH:MM-HH:MM` sets the daily window of bars, e.g. `07:00-20:00`
   for a platform whose extended hours start at 07:00, or `09:30-16:00` for
   regular hours only.
+- `--window HH:MM-HH:MM` sets the minutes whose closes may produce a signal;
+  `--window 10:30-12:30` acts on the 10:30 through 12:29 closes and opens
+  nothing from 12:30 on. Positions still close at 15:55 in the grid.
 - `--cooldown <minutes>` sets the quiet period after a printed signal
   (default 6).
 - `--verbose` prints every minute with its zone, any signal (marked
@@ -157,8 +161,8 @@ Each trade enters at the signal price when the next minute opens. A later
 minute whose range reaches the stop fills it at the stop; one that reaches the
 target fills at the target; whichever comes first wins, and a minute touching
 both counts as the stop. Anything still open closes at the 15:55 price, and
-signals from 15:54 on are skipped. Signals are taken from 10:30 to 14:30, as in
-the replay. Signals come from minute bars rather than
+signals from 15:54 on are skipped. Signals are taken inside the same
+`--window` as the replay, 10:30 to 14:30 by default. Signals come from minute bars rather than
 trades, which gives the same answers as the replay (the tests prove it on a
 real day) in seconds instead of minutes.
 
@@ -187,8 +191,8 @@ contains it.
 Options: `--shares N` (default: the symbol's configured size in
 `SymbolSettings`, else 100), `--stops 0.05,0.10,none` and
 `--targets 0.10,0.20,none` to test your own levels (defaults are multiples of
-the month's typical one-minute range), plus `--cooldown` and `--session` as
-for the replay.
+the month's typical one-minute range), plus `--cooldown`, `--session` and
+`--window` as for the replay.
 
 ## Tests
 

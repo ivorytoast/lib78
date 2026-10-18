@@ -183,6 +183,20 @@ class ReplayTest {
     }
 
     @Test
+    void windowOptionLimitsPrintedMinutes() throws Exception {
+        Replay replay = new Replay(client, new PrintStream(console, true, StandardCharsets.UTF_8));
+
+        Replay.Result r = replay.run(new Replay.Options("RIVN", DAY, Session.EXTENDED,
+                com.hamilla.sma.SignalWindow.parse("10:30-11:00"), 0, false, false, null));
+
+        assertEquals(30, r.signals().size());                 // 10:30 .. 10:59
+        String[] lines = console.toString(StandardCharsets.UTF_8).split("\\R");
+        assertEquals("10:33 SHORT SELL 9.83 9.91", lines[0]);
+        assertEquals("10:59 SHORT SELL 9.83 9.91", lines[lines.length - 1]);
+        assertEquals(27, lines.length);
+    }
+
+    @Test
     void cooldownZeroPrintsEverySignal() throws Exception {
         Replay replay = new Replay(client, new PrintStream(console, true, StandardCharsets.UTF_8));
 

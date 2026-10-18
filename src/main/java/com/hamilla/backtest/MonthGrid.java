@@ -5,6 +5,7 @@ import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
 import com.hamilla.sma.Session;
+import com.hamilla.sma.SignalWindow;
 import com.hamilla.sma.SymbolSettings;
 
 import java.io.IOException;
@@ -31,21 +32,27 @@ public final class MonthGrid {
      * @param month     the first (or only) month to test; only completed trading days are used
      * @param toMonth   the last month of a range, or null for a single month
      * @param session   bar session for the signals
+     * @param window    minutes whose closes may produce a signal
      * @param cooldown  signal cooldown in minutes
      * @param shares    shares per trade (0 means the symbol's configured default)
      * @param stops     explicit stop levels, or null for defaults built from the typical minute range
      * @param targets   explicit target levels, or null for defaults
      */
-    public record Options(String symbol, YearMonth month, YearMonth toMonth, Session session, int cooldown, int shares,
-                          List<Double> stops, List<Double> targets, List<double[]> show) {
+    public record Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
+                          int cooldown, int shares, List<Double> stops, List<Double> targets, List<double[]> show) {
         public Options(String symbol, YearMonth month, Session session, int cooldown, int shares,
                        List<Double> stops, List<Double> targets) {
-            this(symbol, month, null, session, cooldown, shares, stops, targets, List.of());
+            this(symbol, month, null, session, SignalWindow.DEFAULT, cooldown, shares, stops, targets, List.of());
         }
 
         public Options(String symbol, YearMonth month, YearMonth toMonth, Session session, int cooldown, int shares,
                        List<Double> stops, List<Double> targets) {
-            this(symbol, month, toMonth, session, cooldown, shares, stops, targets, List.of());
+            this(symbol, month, toMonth, session, SignalWindow.DEFAULT, cooldown, shares, stops, targets, List.of());
+        }
+
+        public Options(String symbol, YearMonth month, YearMonth toMonth, Session session, int cooldown, int shares,
+                       List<Double> stops, List<Double> targets, List<double[]> show) {
+            this(symbol, month, toMonth, session, SignalWindow.DEFAULT, cooldown, shares, stops, targets, show);
         }
 
         public Options {
@@ -148,10 +155,10 @@ public final class MonthGrid {
         }
 
         List<MinuteBar> bars = client.minuteBars(opts.symbol(), first.minusDays(WARMUP_CALENDAR_DAYS), last);
-        List<TradeSignal> signals = new SignalGenerator(opts.session(), opts.cooldown()).generate(opts.symbol(), bars, days);
+        List<TradeSignal> signals = new SignalGenerator(opts.session(), opts.window(), opts.cooldown()).generate(opts.symbol(), bars, days);
         TreeSet<LocalDate> sorted = (TreeSet<LocalDate>) days;
-        out.printf("%s %s%s: %d trading days (%s to %s), %d signals%n", opts.symbol(), opts.month(),
-                opts.isRange() ? " to " + opts.lastMonth() : "", days.size(), sorted.first(), sorted.last(), signals.size());
+        out.printf("%s %s%s: %d trading days (%s to %s), %d signals in window %s%n", opts.symbol(), opts.month(),
+                opts.isRange() ? " to " + opts.lastMonth() : "", days.size(), sorted.first(), sorted.last(), signals.size(), opts.window());
         if (signals.isEmpty()) {
             throw new IOException("no signals in the period");
         }
@@ -160,7 +167,7 @@ public final class MonthGrid {
         List<Double> stops = opts.stops() != null ? opts.stops() : Grid.defaultLevels(Grid.STOP_MULTIPLES, range);
         List<Double> targets = opts.targets() != null ? opts.targets() : Grid.defaultLevels(Grid.TARGET_MULTIPLES, range);
         int shares = opts.shares() > 0 ? opts.shares() : SymbolSettings.shares(opts.symbol());
-        Grid grid = new Grid(new BracketSimulator(bars));
+        Grid grid = new Grid(new BracketSimulator(bars), opts.window());
 
         if (!opts.isRange()) {
             Grid.Result result = grid.run(opts.symbol(), signals, stops, targets, range, shares);

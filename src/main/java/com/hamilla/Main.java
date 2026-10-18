@@ -7,6 +7,7 @@ import com.hamilla.query.PointInTime;
 import com.hamilla.replay.Replay;
 import com.hamilla.replay.TradingCalendar;
 import com.hamilla.sma.Session;
+import com.hamilla.sma.SignalWindow;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -24,7 +25,7 @@ public final class Main {
                    lib78 grid   <TICKER> <YYYY-MM> [<YYYY-MM>] [options]
 
             replay  Replays one past trading day trade by trade on one-minute bars. Directly after
-                    each minute closes, from 10:30 to 14:30 Eastern, prints the minute when
+                    each minute closes, inside --window (10:30 to 14:30 by default), prints the minute when
                     there is an entry signal:
                       BUY LONG    200 below 50 (and 6+ cents below the 20), 50 below 20 by 3+ cents,
                                   price above the 20 by at most 2 cents
@@ -33,7 +34,7 @@ public final class Main {
                     Each line ends with the price and, for RIVN, the price plus 8 cents.
                     After a signal prints, none prints until --cooldown minutes have passed.
                     Nothing else is printed. Minutes outside the window, pre-market included, still
-                    feed the averages; no trade opens before 10:30 or from 14:30 on.
+                    feed the averages; they are never acted on.
                     With no date, the most recent completed trading day is used.
             at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),
                     using the last trade at or before that minute. Example: at SPY 10/16/2026-12:12
@@ -47,6 +48,8 @@ public final class Main {
             options:
               --session <HH:MM-HH:MM>  daily window of bars the averages run on, Eastern time
                                        (default 04:00-20:00; a minute with no trade has no bar)
+              --window <HH:MM-HH:MM>   minutes whose closes may produce a signal (default 10:30-14:30:
+                                       the 10:30 close is the first acted on, nothing opens from 14:30)
               --cooldown <minutes>  replay: minutes after a printed signal during which no signal
                             prints (default 6; 0 prints every signal)
               --verbose     replay: print every minute with its up/down/none zone, any signal,
@@ -81,17 +84,20 @@ public final class Main {
         }
 
         Session session = Session.EXTENDED;
+        SignalWindow window = SignalWindow.DEFAULT;
         List<String> rest = new ArrayList<>();
         for (int i = 2; i < args.length; i++) {
-            if (args[i].equals("--session")) {
-                try {
+            try {
+                if (args[i].equals("--session")) {
                     session = Session.parse(requireValue(args, ++i));
-                } catch (IllegalArgumentException e) {
-                    System.err.println("error: " + e.getMessage());
-                    System.exit(2);
+                } else if (args[i].equals("--window")) {
+                    window = SignalWindow.parse(requireValue(args, ++i));
+                } else {
+                    rest.add(args[i]);
                 }
-            } else {
-                rest.add(args[i]);
+            } catch (IllegalArgumentException e) {
+                System.err.println("error: " + e.getMessage());
+                System.exit(2);
             }
         }
         args = concat(args[0], args[1], rest);
@@ -100,7 +106,7 @@ public final class Main {
             System.exit(at(symbols, session, args));
         }
         if (args[0].equals("grid")) {
-            System.exit(grid(symbols, session, args));
+            System.exit(grid(symbols, session, window, args));
         }
         LocalDate date = null;
         int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
@@ -148,7 +154,7 @@ public final class Main {
             LocalDate day = date != null ? date
                     : TradingCalendar.previousTradingDay(client, symbol, LocalDate.now(PriceEvent.EASTERN));
             Path csvFor = csvFor(csv, symbol, symbols.size() > 1);
-            Replay.Result result = replay.run(new Replay.Options(symbol, day, session, cooldown, verbose, verify, csvFor));
+            Replay.Result result = replay.run(new Replay.Options(symbol, day, session, window, cooldown, verbose, verify, csvFor));
             allPass &= result.allOraclesPass();
         }
         System.exit(allPass ? 0 : 1);
@@ -192,7 +198,7 @@ public final class Main {
         return failures == 0 ? 0 : 1;
     }
 
-    private static int grid(List<String> symbols, Session session, String[] args) throws Exception {
+    private static int grid(List<String> symbols, Session session, SignalWindow window, String[] args) throws Exception {
         if (symbols.size() != 1 || args.length < 3) {
             System.err.println("grid needs one ticker and a month, e.g. grid RIVN 2026-10");
             return 2;
@@ -243,7 +249,7 @@ public final class Main {
         }
         try {
             new MonthGrid(clientOrExit(), System.out).runAny(
-                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, cooldown, shares, stops, targets, show));
+                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, window, cooldown, shares, stops, targets, show));
             return 0;
         } catch (IllegalArgumentException e) {
             System.err.println("error: " + e.getMessage());

@@ -44,6 +44,14 @@ class SignalGeneratorTest {
     }
 
     @Test
+    void aNarrowerWindowDropsTheLaterSignals() {
+        List<TradeSignal> signals = new SignalGenerator(Session.EXTENDED, com.hamilla.sma.SignalWindow.parse("10:30-12:30"), 6)
+                .generate("RIVN", Bars.rivnOct15and16(), Set.of(OCT16));
+        assertEquals(10, signals.size());                     // through 12:23; 13:20 and 14:15 fall outside
+        assertEquals("12:23", signals.get(9).time());
+    }
+
+    @Test
     void onlyRequestedDaysProduceSignals() {
         List<TradeSignal> signals = new SignalGenerator(Session.EXTENDED, 6).generate("RIVN", Bars.rivnOct15and16(), Set.of(LocalDate.of(2026, 10, 15)));
         assertTrue(signals.isEmpty()); // the fixture's 10/15 bars are all after 16:00
