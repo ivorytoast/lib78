@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GridTest {
@@ -58,8 +59,8 @@ class GridTest {
                 List.of(0.08, 0.15, BracketSimulator.NONE), List.of(0.12, 0.40, BracketSimulator.NONE), 0.02, 2000);
 
         assertEquals(3, r.months().size());
-        assertEquals(2 * 2896.20, r.total()[0][0], 1e-6);
-        assertEquals(2896.20, r.worstMonth()[0][0], 1e-6);
+        assertEquals(2 * 2480.0, r.total()[0][0], 1e-6);
+        assertEquals(2480.0, r.worstMonth()[0][0], 1e-6);
         assertEquals(2, r.monthsPositive()[0][0]);              // the empty month does not count
         assertEquals(2 * signals.size(), r.signals());
         // Identical months have zero deviation, so the score is the mean monthly P&L and the
@@ -86,20 +87,20 @@ class GridTest {
         long d = Bars.T_0400_1016;
         TradeSignal early = new TradeSignal(d + 390 * 60_000L, com.hamilla.sma.Action.BUY_LONG, 10);      // 10:30
         TradeSignal noon = new TradeSignal(d + 509 * 60_000L, com.hamilla.sma.Action.BUY_LONG, 10);       // 12:29
-        TradeSignal late = new TradeSignal(d + 713 * 60_000L, com.hamilla.sma.Action.BUY_LONG, 10);       // 15:53
+        TradeSignal late = new TradeSignal(d + 629 * 60_000L, com.hamilla.sma.Action.BUY_LONG, 10);       // 14:29
         List<BracketSimulator.Trade> trades = List.of(
                 new BracketSimulator.Trade(early, BracketSimulator.Outcome.TARGET, 0, 0, 20),
                 new BracketSimulator.Trade(noon, BracketSimulator.Outcome.STOP, 0, 0, -10),
                 new BracketSimulator.Trade(late, BracketSimulator.Outcome.HELD, 0, 0, 5));
         List<Grid.TimeBucket> buckets = Grid.byTime(trades);
-        assertEquals(5, buckets.size());
+        assertEquals(4, buckets.size());
         assertEquals("10:30-11:29", buckets.get(0).label());
         assertEquals(1, buckets.get(0).targets());
         assertEquals("11:30-12:29", buckets.get(1).label());
         assertEquals(1, buckets.get(1).stops());
         assertEquals(-10.0, buckets.get(1).pnl(), 1e-9);
-        assertEquals("14:30-15:53", buckets.get(4).label());
-        assertEquals(1, buckets.get(4).held());
+        assertEquals("13:30-14:29", buckets.get(3).label());
+        assertEquals(1, buckets.get(3).held());
         assertEquals(0, buckets.get(2).trades());
     }
 
@@ -124,18 +125,19 @@ class GridTest {
         Grid.Result r = new Grid(new BracketSimulator(bars)).run("RIVN", signals,
                 List.of(0.08, 0.15, BracketSimulator.NONE), List.of(0.12, 0.40, BracketSimulator.NONE), range, 2000);
 
-        assertEquals(2896.20, r.pnl()[0][0], 1e-6);      // 8 cent stop, 12 cent target, as computed by hand earlier
-        assertEquals(8066.2, r.pnl()[0][2], 1e-6);       // 8 cent stop, no target
+        assertEquals(2480.0, r.pnl()[0][0], 1e-6);       // 8 cent stop, 12 cent target
+        assertEquals(7650.0, r.pnl()[0][2], 1e-6);       // 8 cent stop, no target
         assertTrue(r.recommendation().stop() < BracketSimulator.NONE && r.recommendation().target() < BracketSimulator.NONE);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         Grid.print(r, new PrintStream(out, true, StandardCharsets.UTF_8));
         String text = out.toString(StandardCharsets.UTF_8);
         assertTrue(text.contains("stop \\ target      0.12      0.40      none"), text);
-        assertTrue(text.matches("(?s).*\\n0\\.08\\s+2,896\\s.*"), text);
+        assertTrue(text.matches("(?s).*\\n0\\.08\\s+2,480\\s.*"), text);
         assertTrue(text.contains("by entry time, with these brackets:"), text);
         assertTrue(text.contains("10:30-11:29"), text);
-        assertTrue(text.contains("14:30-15:53"), text);
+        assertTrue(text.contains("13:30-14:29"), text);
+        assertFalse(text.contains("14:30-"), text);
         assertTrue(text.contains("recommendation: stop "), text);
         assertTrue(text.contains("one day supplies 100% of the P&L"), text);
         assertTrue(text.contains("small sample"), text);

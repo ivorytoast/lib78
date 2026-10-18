@@ -71,11 +71,11 @@ class MonthGridTest {
         Grid.Result r = grid.run(new MonthGrid.Options("RIVN", YearMonth.of(2026, 10), Session.EXTENDED, 6, 0,
                 List.of(0.08, 0.15), List.of(0.12, 0.40)));
 
-        assertEquals(16, r.signals());
+        assertEquals(12, r.signals());
         assertEquals(2000, r.shares());                       // RIVN's configured size
-        assertEquals(2896.20, r.pnl()[0][0], 1e-6);
+        assertEquals(2480.0, r.pnl()[0][0], 1e-6);
         String text = out.toString(StandardCharsets.UTF_8);
-        assertTrue(text.contains("RIVN 2026-10: 1 trading days (2026-10-16 to 2026-10-16), 16 signals"), text);
+        assertTrue(text.contains("RIVN 2026-10: 1 trading days (2026-10-16 to 2026-10-16), 12 signals"), text);
         assertTrue(text.contains("recommendation: stop "), text);
     }
 
@@ -91,7 +91,7 @@ class MonthGridTest {
         assertTrue(o.single() == null && o.multi() != null);
         Grid.MultiResult r = o.multi();
         assertEquals(List.of(YearMonth.of(2026, 9), YearMonth.of(2026, 10)), r.months());
-        assertEquals(2896.20, r.total()[0][0], 1e-6);
+        assertEquals(2480.0, r.total()[0][0], 1e-6);
         assertEquals(1, r.monthsPositive()[0][0]);
         String text = out.toString(StandardCharsets.UTF_8);
         assertTrue(text.contains("RIVN 2026-09 to 2026-10: 1 trading days"), text);

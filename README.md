@@ -72,7 +72,7 @@ java -jar target/lib78.jar replay SPY,QQQ,IWM --verbose --verify --csv out.csv
 With no date the most recent completed trading day is replayed. The run loads
 the previous week of minute bars so the 200 bar window is full from the first
 trade, then streams every trade of the day in time order. Directly after each
-minute closes, from 10:30 through 15:59 Eastern, it classifies the minute:
+minute closes, from 10:30 to 14:30 Eastern, it classifies the minute:
 
 | zone | meaning |
 |---|---|
@@ -92,7 +92,7 @@ and prints the minute only when the zone gives an entry signal:
 11:12 SHORT SELL 12.82 12.90
 11:19 SHORT SELL 12.805 12.885
 ...
-15:57 SHORT SELL 12.375 12.455
+14:15 SHORT SELL 12.51 12.59
 ```
 
 Each line ends with the price at that minute's close and, for symbols with an
@@ -108,7 +108,7 @@ just never printed.
 `expected/RIVN-2026-10-16.txt` holds the full expected output for that day,
 derived independently from every trade of the day, so
 `replay RIVN 2026-10-16 | diff - expected/RIVN-2026-10-16.txt`
-should print nothing. RIVN fell all day, so it has 16 `SHORT SELL` lines and
+should print nothing. RIVN fell all day, so it has 12 `SHORT SELL` lines and
 no `BUY LONG`.
 
 Options:
@@ -157,8 +157,8 @@ Each trade enters at the signal price when the next minute opens. A later
 minute whose range reaches the stop fills it at the stop; one that reaches the
 target fills at the target; whichever comes first wins, and a minute touching
 both counts as the stop. Anything still open closes at the 15:55 price, and
-signals from 15:54 on are skipped. Signals are taken from 10:30, as in the
-replay. Signals come from minute bars rather than
+signals from 15:54 on are skipped. Signals are taken from 10:30 to 14:30, as in
+the replay. Signals come from minute bars rather than
 trades, which gives the same answers as the replay (the tests prove it on a
 real day) in seconds instead of minutes.
 

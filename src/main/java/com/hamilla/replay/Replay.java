@@ -34,7 +34,7 @@ import java.util.TreeMap;
 
 /**
  * Replays one past trading day for one symbol, trade by trade, on the one-minute bar series.
- * Directly after each minute closes, from 10:30 through 15:59 Eastern, it classifies the 20/50/200
+ * Directly after each minute closes, from 10:30 to 14:30 Eastern, it classifies the 20/50/200
  * alignment and price as "up", "down" or "none" and prints the minute when that gives an entry
  * signal: "BUY LONG" in the up zone with the price within two cents above the 20, "SHORT SELL" in
  * the down zone with the price within two cents below it, followed by the price and, for symbols

@@ -141,9 +141,9 @@ class ReplayTest {
 
         Replay.Result r = replay.run(new Replay.Options("RIVN", DAY, false, false, null));
 
-        assertEquals(330, r.signals().size());                 // 10:30 .. 15:59 classified
+        assertEquals(240, r.signals().size());                 // 10:30 .. 14:29 classified
         assertEquals(T_1030, r.signals().get(0).barStartMs());
-        assertEquals(T_1600 - 60_000L, r.signals().get(329).barStartMs());
+        assertEquals(T_0400 + 629 * 60_000L, r.signals().get(239).barStartMs());
         // 10:30: 20=10.001 50=10.0004 200=10.0001, price 10.02: aligned, but the 20 and 50 are far closer than 3 cents -> none
         assertEquals(Trend.NONE, r.signals().get(0).trend());
         assertEquals(Optional.empty(), r.signals().get(0).action());
@@ -159,25 +159,25 @@ class ReplayTest {
         assertEquals(Optional.of(Action.SHORT_SELL), r.signals().get(3).action());
         assertEquals(9.8425, r.signals().get(3).atClose().sma20(), 1e-9);
         // No trades until 16:00: every later minute repeats the 10:33 state, nothing rolls into the windows.
-        assertEquals(Optional.of(Action.SHORT_SELL), r.signals().get(329).action());
-        assertEquals(9.8425, r.signals().get(329).atClose().sma20(), 1e-9);
+        assertEquals(Optional.of(Action.SHORT_SELL), r.signals().get(239).action());
+        assertEquals(9.8425, r.signals().get(239).atClose().sma20(), 1e-9);
         assertEquals(20, r.barsClosed());                       // 10:15 .. 10:33 and 16:00
         assertEquals(960 - 20, r.emptyMinutes());
         assertEquals(22, r.tradesSeen());
         assertEquals(20, r.tradesApplied());
         assertTrue(r.oracleChecks().isEmpty());
 
-        // The signal holds every minute from 10:33 to 15:59 (327 minutes); with the default six-minute
-        // cooldown only every sixth one prints: 10:33, 10:39, ... 15:57.
+        // The signal holds every minute from 10:33 to 14:29 (237 minutes); with the default six-minute
+        // cooldown only every sixth one prints: 10:33, 10:39, ... 14:27.
         assertTrue(r.signals().get(3).printed());
         assertFalse(r.signals().get(4).printed());
         assertTrue(r.signals().get(9).printed());
-        assertEquals(327 - 55, r.signalsHeldByCooldown());
+        assertEquals(237 - 40, r.signalsHeldByCooldown());
         String[] lines = console.toString(StandardCharsets.UTF_8).split("\\R");
         assertEquals("10:33 SHORT SELL 9.83 9.91", lines[0]);  // RIVN: price, then price plus eight cents
         assertEquals("10:39 SHORT SELL 9.83 9.91", lines[1]);
-        assertEquals("15:57 SHORT SELL 9.83 9.91", lines[lines.length - 1]);
-        assertEquals(55, lines.length);                         // no summary line
+        assertEquals("14:27 SHORT SELL 9.83 9.91", lines[lines.length - 1]);
+        assertEquals(40, lines.length);                         // no summary line
         assertFalse(console.toString(StandardCharsets.UTF_8).contains("none"));
         assertFalse(console.toString(StandardCharsets.UTF_8).contains("BUY"));
     }
@@ -190,8 +190,8 @@ class ReplayTest {
 
         assertEquals(0, r.signalsHeldByCooldown());
         String[] lines = console.toString(StandardCharsets.UTF_8).split("\\R");
-        assertEquals(327, lines.length);
-        assertEquals("15:59 SHORT SELL 9.83 9.91", lines[326]);
+        assertEquals(237, lines.length);
+        assertEquals("14:29 SHORT SELL 9.83 9.91", lines[236]);
     }
 
     @Test
@@ -202,7 +202,7 @@ class ReplayTest {
 
         // Same answers here because the previous day was flat at 10, but only 390 minutes per day exist
         // and the 16:00 closing print falls outside the session.
-        assertEquals(330, r.signals().size());
+        assertEquals(240, r.signals().size());
         assertEquals(Optional.of(Action.SHORT_SELL), r.signals().get(3).action());
         assertEquals(19, r.barsClosed());
         assertEquals(390 - 19, r.emptyMinutes());

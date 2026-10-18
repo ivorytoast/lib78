@@ -34,9 +34,16 @@ public final class Grid {
     /** Target sizes as multiples of the typical one-minute range. */
     static final double[] TARGET_MULTIPLES = {1.5, 2, 3, 4, 6, 8};
 
-    /** Entry-time buckets for the time-of-day breakdown, from the first acted-on minute. */
-    static final LocalTime[] BUCKET_STARTS = {
-            SignalWindow.FIRST, LocalTime.of(11, 30), LocalTime.of(12, 30), LocalTime.of(13, 30), LocalTime.of(14, 30)};
+    /** Entry-time buckets for the time-of-day breakdown: hourly from the first acted-on minute to the last. */
+    static final LocalTime[] BUCKET_STARTS = bucketStarts();
+
+    private static LocalTime[] bucketStarts() {
+        List<LocalTime> starts = new ArrayList<>();
+        for (LocalTime t = SignalWindow.FIRST; !t.isAfter(SignalWindow.LAST); t = t.plusHours(1)) {
+            starts.add(t);
+        }
+        return starts.toArray(new LocalTime[0]);
+    }
 
     public record Result(String symbol, List<Double> stops, List<Double> targets, double[][] pnl,
                          BracketSimulator.Summary[][] cells, double typicalRange, int signals, int shares,
@@ -254,8 +261,9 @@ public final class Grid {
             }
         }
         List<TimeBucket> buckets = new ArrayList<>();
+        LocalTime lastEntry = SignalWindow.LAST.isBefore(BracketSimulator.LAST_ENTRY) ? SignalWindow.LAST : BracketSimulator.LAST_ENTRY.minusMinutes(1);
         for (int b = 0; b < n; b++) {
-            LocalTime end = b + 1 < n ? BUCKET_STARTS[b + 1].minusMinutes(1) : BracketSimulator.LAST_ENTRY.minusMinutes(1);
+            LocalTime end = b + 1 < n ? BUCKET_STARTS[b + 1].minusMinutes(1) : lastEntry;
             buckets.add(new TimeBucket(BUCKET_STARTS[b] + "-" + end, count[b], t[b], s[b], h[b], pnl[b]));
         }
         return buckets;
