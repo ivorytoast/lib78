@@ -23,26 +23,26 @@ class BracketSimulatorTest {
         BracketSimulator sim = new BracketSimulator(bars);
 
         List<BracketSimulator.Trade> trades = sim.simulate(signals, 0.08, 0.12, 2000);
-        assertEquals(19, trades.size());                               // the 15:57 signal cannot be held
+        assertEquals(15, trades.size());                               // the 15:57 signal cannot be held
         BracketSimulator.Summary s = sim.summarize(signals, 0.08, 0.12, 2000);
-        assertEquals(15, s.targets());
+        assertEquals(11, s.targets());
         assertEquals(1, s.stops());
         assertEquals(3, s.held());
-        assertEquals(3856.20, s.pnl(), 1e-6);
+        assertEquals(2896.20, s.pnl(), 1e-6);
         assertEquals(-160.0, s.worstTrade(), 1e-9);
-        assertEquals(3856.20, s.pnlByDay().get(OCT16), 1e-6);
+        assertEquals(2896.20, s.pnlByDay().get(OCT16), 1e-6);
 
-        BracketSimulator.Trade first = trades.get(0);                  // 10:02 short at 12.995, target 12.875 hit at 10:54
+        BracketSimulator.Trade first = trades.get(0);                  // 10:31 short at 12.93, target 12.81 hit at 11:06
         assertEquals(BracketSimulator.Outcome.TARGET, first.outcome());
-        assertEquals(Bars.at("10:54"), first.exitBarMs());
+        assertEquals(Bars.at("11:06"), first.exitBarMs());
         assertEquals(240.0, first.pnl(), 1e-9);
 
-        BracketSimulator.Trade stopped = trades.get(14);               // 13:20 short at 12.5401, stop 12.6201 hit at 13:41
+        BracketSimulator.Trade stopped = trades.get(10);               // 13:20 short at 12.5401, stop 12.6201 hit at 13:41
         assertEquals(BracketSimulator.Outcome.STOP, stopped.outcome());
         assertEquals(Bars.at("13:41"), stopped.exitBarMs());
         assertEquals(-160.0, stopped.pnl(), 1e-9);
 
-        BracketSimulator.Trade held = trades.get(16);                  // 14:31 short at 12.46, closed at the 15:54 bar's 12.3899
+        BracketSimulator.Trade held = trades.get(12);                  // 14:31 short at 12.46, closed at the 15:54 bar's 12.3899
         assertEquals(BracketSimulator.Outcome.HELD, held.outcome());
         assertEquals(Bars.at("15:54"), held.exitBarMs());
         assertEquals(12.3899, held.exitPrice(), 1e-9);
@@ -54,9 +54,9 @@ class BracketSimulatorTest {
         List<MinuteBar> bars = Bars.rivnOct15and16();
         List<TradeSignal> signals = new SignalGenerator(Session.EXTENDED, 6).generate("RIVN", bars, Set.of(OCT16));
         BracketSimulator.Summary s = new BracketSimulator(bars).summarize(signals, 0.08, BracketSimulator.NONE, 2000);
-        assertEquals(12777.0, s.pnl(), 1e-6);
+        assertEquals(8066.2, s.pnl(), 1e-6);
         assertEquals(1, s.stops());
-        assertEquals(18, s.held());
+        assertEquals(14, s.held());
     }
 
     private static MinuteBar bar(long t, double o, double h, double l, double c) {

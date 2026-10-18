@@ -21,10 +21,10 @@ public final class Main {
     private static final String USAGE = """
             usage: lib78 replay <TICKER[,TICKER...]> [YYYY-MM-DD] [options]
                    lib78 at     <TICKER[,TICKER...]> <MM/DD/YYYY-HH:MM>
-                   lib78 grid   <TICKER> <YYYY-MM> [options]
+                   lib78 grid   <TICKER> <YYYY-MM> [<YYYY-MM>] [options]
 
             replay  Replays one past trading day trade by trade on one-minute bars. Directly after
-                    each minute closes, from 09:45 through 15:59 Eastern, prints the minute when
+                    each minute closes, from 10:30 through 15:59 Eastern, prints the minute when
                     there is an entry signal:
                       BUY LONG    200 below 50 (and 6+ cents below the 20), 50 below 20 by 3+ cents,
                                   price above the 20 by at most 2 cents
@@ -32,14 +32,17 @@ public final class Main {
                                   price below the 20 by at most 2 cents
                     Each line ends with the price and, for RIVN, the price plus 8 cents.
                     After a signal prints, none prints until --cooldown minutes have passed.
-                    Nothing else is printed. Pre-market bars still feed the averages.
+                    Nothing else is printed. Earlier minutes, pre-market included, still feed the
+                    averages; the first hour is never acted on.
                     With no date, the most recent completed trading day is used.
             at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),
                     using the last trade at or before that minute. Example: at SPY 10/16/2026-12:12
             grid    Generates every completed trading day's signals for the month, then prints the
                     total P&L for each stop-and-target pair (entry at the signal price, brackets
                     filled on the minute's high or low, the rest closed at 15:55) and a recommended
-                    pair chosen from the most consistent region of the table.
+                    pair chosen from the most consistent region of the table. With a second month,
+                    runs every month in the range on the same levels and prints the total, the worst
+                    month and the number of positive months per pair, recommending by steadiness.
 
             options:
               --session <HH:MM-HH:MM>  daily window of bars the averages run on, Eastern time
@@ -199,12 +202,23 @@ public final class Main {
             System.err.println("error: " + e.getMessage());
             return 2;
         }
+        YearMonth toMonth = null;
+        int firstOption = 3;
+        if (args.length > 3 && !args[3].startsWith("--")) {
+            try {
+                toMonth = MonthGrid.parseMonth(args[3]);
+            } catch (IllegalArgumentException e) {
+                System.err.println("error: " + e.getMessage());
+                return 2;
+            }
+            firstOption = 4;
+        }
         int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
         int shares = 0;
         List<Double> stops = null;
         List<Double> targets = null;
         try {
-            for (int i = 3; i < args.length; i++) {
+            for (int i = firstOption; i < args.length; i++) {
                 switch (args[i]) {
                     case "--cooldown" -> cooldown = Integer.parseInt(requireValue(args, ++i));
                     case "--shares" -> shares = Integer.parseInt(requireValue(args, ++i));
@@ -224,8 +238,12 @@ public final class Main {
             return 2;
         }
         try {
-            new MonthGrid(clientOrExit(), System.out).run(new MonthGrid.Options(symbols.get(0), month, session, cooldown, shares, stops, targets));
+            new MonthGrid(clientOrExit(), System.out).runAny(
+                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, cooldown, shares, stops, targets));
             return 0;
+        } catch (IllegalArgumentException e) {
+            System.err.println("error: " + e.getMessage());
+            return 2;
         } catch (IOException e) {
             System.err.println("error: " + e.getMessage());
             return 1;

@@ -7,11 +7,11 @@ import com.hamilla.sma.Cooldown;
 import com.hamilla.sma.MinuteBarTracker;
 import com.hamilla.sma.MovingAverages;
 import com.hamilla.sma.Session;
+import com.hamilla.sma.SignalWindow;
 import com.hamilla.sma.SmaSnapshot;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -24,10 +24,6 @@ import java.util.Set;
  * signals a trade-by-trade replay does, in a fraction of the time.
  */
 public final class SignalGenerator {
-
-    /** Same printed window as the replay. */
-    static final LocalTime FIRST = LocalTime.of(9, 45);
-    static final LocalTime LAST = LocalTime.of(15, 59);
 
     private final Session session;
     private final int cooldownMinutes;
@@ -55,8 +51,7 @@ public final class SignalGenerator {
                 current[0] = day;
                 cooldown.reset();
             }
-            LocalTime t = et.toLocalTime();
-            if (t.isBefore(FIRST) || t.isAfter(LAST) || !dates.contains(day)) {
+            if (!SignalWindow.contains(barStartMs) || !dates.contains(day)) {
                 return;
             }
             Optional<Action> action = Action.of(atClose);

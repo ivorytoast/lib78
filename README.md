@@ -72,7 +72,7 @@ java -jar target/lib78.jar replay SPY,QQQ,IWM --verbose --verify --csv out.csv
 With no date the most recent completed trading day is replayed. The run loads
 the previous week of minute bars so the 200 bar window is full from the first
 trade, then streams every trade of the day in time order. Directly after each
-minute closes, from 09:45 through 15:59 Eastern, it classifies the minute:
+minute closes, from 10:30 through 15:59 Eastern, it classifies the minute:
 
 | zone | meaning |
 |---|---|
@@ -88,9 +88,9 @@ and prints the minute only when the zone gives an entry signal:
 | `SHORT SELL` | down zone and the price is at most 2 cents below the 20 |
 
 ```
-10:02 SHORT SELL 12.995 13.075
-10:10 SHORT SELL 12.98 13.06
-10:16 SHORT SELL 12.975 13.055
+10:31 SHORT SELL 12.93 13.01
+11:12 SHORT SELL 12.82 12.90
+11:19 SHORT SELL 12.805 12.885
 ...
 15:57 SHORT SELL 12.375 12.455
 ```
@@ -108,8 +108,8 @@ just never printed.
 `expected/RIVN-2026-10-16.txt` holds the full expected output for that day,
 derived independently from every trade of the day, so
 `replay RIVN 2026-10-16 | diff - expected/RIVN-2026-10-16.txt`
-should print nothing. RIVN fell all day, so it has 20 `SHORT SELL` lines and
-no `BUY LONG` (45 minutes qualified; the cooldown holds back 25).
+should print nothing. RIVN fell all day, so it has 16 `SHORT SELL` lines and
+no `BUY LONG`.
 
 Options:
 
@@ -157,7 +157,8 @@ Each trade enters at the signal price when the next minute opens. A later
 minute whose range reaches the stop fills it at the stop; one that reaches the
 target fills at the target; whichever comes first wins, and a minute touching
 both counts as the stop. Anything still open closes at the 15:55 price, and
-signals from 15:54 on are skipped. Signals come from minute bars rather than
+signals from 15:54 on are skipped. Signals are taken from 10:30, as in the
+replay. Signals come from minute bars rather than
 trades, which gives the same answers as the replay (the tests prove it on a
 real day) in seconds instead of minutes.
 
@@ -165,6 +166,18 @@ The recommendation is the finite cell whose 3-by-3 neighbourhood averages
 highest, so it sits on a plateau rather than a one-cell spike. The printout
 also states the breakeven win rate, whether the pair is a trend bet or a
 scalp, and warnings when one day dominates the result or the sample is small.
+
+With a second month the same levels are applied to every month in the range,
+and three tables are printed per stop-and-target pair: the total over all
+months, the worst month, and how many months were positive. The
+recommendation is then chosen by mean monthly P&L minus its standard
+deviation, smoothed over neighbouring cells, so a pair that earns steadily
+beats one that earned a lot once. Its month-by-month results and a breakdown
+by entry time follow:
+
+```
+java -jar target/lib78.jar grid RIVN 2026-01 2026-10
+```
 
 Options: `--shares N` (default: the symbol's configured size in
 `SymbolSettings`, else 100), `--stops 0.05,0.10,none` and

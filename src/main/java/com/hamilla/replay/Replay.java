@@ -8,6 +8,7 @@ import com.hamilla.sma.MinuteBarTracker;
 import com.hamilla.sma.MovingAverages;
 import com.hamilla.sma.Session;
 import com.hamilla.sma.SignalPrices;
+import com.hamilla.sma.SignalWindow;
 import com.hamilla.sma.SmaSnapshot;
 import com.hamilla.sma.Trend;
 
@@ -19,7 +20,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -34,7 +34,7 @@ import java.util.TreeMap;
 
 /**
  * Replays one past trading day for one symbol, trade by trade, on the one-minute bar series.
- * Directly after each minute closes, from 09:45 through 15:59 Eastern, it classifies the 20/50/200
+ * Directly after each minute closes, from 10:30 through 15:59 Eastern, it classifies the 20/50/200
  * alignment and price as "up", "down" or "none" and prints the minute when that gives an entry
  * signal: "BUY LONG" in the up zone with the price within two cents above the 20, "SHORT SELL" in
  * the down zone with the price within two cents below it, followed by the price and, for symbols
@@ -53,9 +53,6 @@ public final class Replay {
     private static final int LARGEST_WINDOW = 200;
     private static final double ORACLE_TOLERANCE = 1e-6;
     private static final int MISMATCH_EXAMPLES = 5;
-    /** First and last minute whose close is printed. */
-    static final LocalTime FIRST_PRINTED = LocalTime.of(9, 45);
-    static final LocalTime LAST_PRINTED = LocalTime.of(15, 59);
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
     private static final DateTimeFormatter BAR_TIME = DateTimeFormatter.ofPattern("HH:mm");
 
@@ -260,8 +257,7 @@ public final class Replay {
     }
 
     private static boolean printed(long barStartMs) {
-        LocalTime t = Instant.ofEpochMilli(barStartMs).atZone(PriceEvent.EASTERN).toLocalTime();
-        return !t.isBefore(FIRST_PRINTED) && !t.isAfter(LAST_PRINTED);
+        return SignalWindow.contains(barStartMs);
     }
 
     /** Feeds trades to the tracker, prints each minute's trend, checks bars against Massive, and optionally writes a CSV. */

@@ -71,12 +71,33 @@ class MonthGridTest {
         Grid.Result r = grid.run(new MonthGrid.Options("RIVN", YearMonth.of(2026, 10), Session.EXTENDED, 6, 0,
                 List.of(0.08, 0.15), List.of(0.12, 0.40)));
 
-        assertEquals(20, r.signals());
+        assertEquals(16, r.signals());
         assertEquals(2000, r.shares());                       // RIVN's configured size
-        assertEquals(3856.20, r.pnl()[0][0], 1e-6);
+        assertEquals(2896.20, r.pnl()[0][0], 1e-6);
         String text = out.toString(StandardCharsets.UTF_8);
-        assertTrue(text.contains("RIVN 2026-10: 1 trading days (2026-10-16 to 2026-10-16), 20 signals"), text);
+        assertTrue(text.contains("RIVN 2026-10: 1 trading days (2026-10-16 to 2026-10-16), 16 signals"), text);
         assertTrue(text.contains("recommendation: stop "), text);
+    }
+
+    @Test
+    void runsARangeOfMonths() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        MonthGrid grid = new MonthGrid(client, new PrintStream(out, true, StandardCharsets.UTF_8));
+
+        // September has no bars in the mock, so it contributes no signals; October has its one day.
+        MonthGrid.Outcome o = grid.runAny(new MonthGrid.Options("RIVN", YearMonth.of(2026, 9), YearMonth.of(2026, 10),
+                Session.EXTENDED, 6, 0, List.of(0.08, 0.15), List.of(0.12, 0.40)));
+
+        assertTrue(o.single() == null && o.multi() != null);
+        Grid.MultiResult r = o.multi();
+        assertEquals(List.of(YearMonth.of(2026, 9), YearMonth.of(2026, 10)), r.months());
+        assertEquals(2896.20, r.total()[0][0], 1e-6);
+        assertEquals(1, r.monthsPositive()[0][0]);
+        String text = out.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("RIVN 2026-09 to 2026-10: 1 trading days"), text);
+        assertTrue(text.contains("months positive (of 2)"), text);
+        assertThrows(IllegalArgumentException.class, () -> new MonthGrid.Options("RIVN", YearMonth.of(2026, 10),
+                YearMonth.of(2026, 9), Session.EXTENDED, 6, 0, null, null));
     }
 
     private static void reply(HttpExchange ex, String body) throws IOException {
