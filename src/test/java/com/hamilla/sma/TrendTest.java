@@ -40,6 +40,15 @@ class TrendTest {
     }
 
     @Test
+    void the20And200MustBeAtLeastSixCentsApart() {
+        assertEquals(Trend.UP, Trend.of(snap(10.10, 10.00, 9.95, 9.94)));      // exactly six cents
+        assertEquals(Trend.NONE, Trend.of(snap(10.10, 10.00, 9.95, 9.941)));   // 5.9 cents
+        assertEquals(Trend.DOWN, Trend.of(snap(9.80, 9.90, 9.95, 9.96)));      // exactly six cents
+        assertEquals(Trend.NONE, Trend.of(snap(9.80, 9.90, 9.95, 9.959)));     // 5.9 cents
+        assertEquals(Trend.UP, Trend.of(snap(10.10, 10.00, 9.95, 10.00 - 0.06)));
+    }
+
+    @Test
     void missingAveragesAreNone() {
         assertEquals(Trend.NONE, Trend.of(snap(10.10, 10.00, 9.90, Double.NaN)));
         assertEquals(Trend.NONE, Trend.of(snap(10.10, Double.NaN, Double.NaN, Double.NaN)));

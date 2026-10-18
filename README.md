@@ -76,9 +76,9 @@ minute closes, from 09:45 through 15:59 Eastern, it classifies the minute:
 
 | zone | meaning |
 |---|---|
-| up   | 200 below 50, 50 below 20 by at least 3 cents, and the price above the 20 |
-| down | 200 above 50, 50 above 20 by at least 3 cents, and the price below the 20 |
-| none | anything else, ties and a 20 and 50 closer than 3 cents included |
+| up   | 200 below 50, 50 below 20, price above the 20; the 50 at least 3 cents and the 200 at least 6 cents below the 20 |
+| down | 200 above 50, 50 above 20, price below the 20; the 50 at least 3 cents and the 200 at least 6 cents above the 20 |
+| none | anything else, ties and averages closer than those gaps included |
 
 and prints the minute only when the zone gives an entry signal:
 
