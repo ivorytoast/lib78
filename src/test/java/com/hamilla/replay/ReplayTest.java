@@ -1,6 +1,7 @@
 package com.hamilla.replay;
 
 import com.hamilla.massive.MassiveClient;
+import com.hamilla.sma.Action;
 import com.hamilla.sma.Session;
 import com.hamilla.sma.Trend;
 import com.sun.net.httpserver.HttpExchange;
@@ -23,6 +24,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -30,9 +32,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Runs the whole replay against a local server with a hand-built day. The previous day is flat at 10,
- * the replay day trades 10 once a minute from 09:30 to 09:44, then 11 at 09:45, 9 at 09:46, 8 at 09:47,
- * nothing until the 16:00 closing print at 8.5. Massive's minute SMA values are computed in the test
- * from the same series, so with --verify every bar must match.
+ * the replay day trades 10 once a minute from 09:30 to 09:44, then 10.02 at 09:45 (up zone, within
+ * two cents: BUY LONG), 9 at 09:46 and 8 at 09:47 (down zone, too far below the 20), 9.83 at 09:48
+ * (down zone, within two cents: SHORT SELL), then nothing until the 16:00 closing print at 8.5.
+ * Massive's minute SMA values are computed in the test from the same series, so with --verify every
+ * bar must match.
  */
 class ReplayTest {
 
@@ -63,11 +67,13 @@ class ReplayTest {
             } else if (t < T_0930 + 15 * 60_000L) {
                 c = 10.0;                                      // 09:30 .. 09:44
             } else if (t == T_0930 + 15 * 60_000L) {
-                c = 11.0;                                      // 09:45
+                c = 10.02;                                     // 09:45
             } else if (t == T_0930 + 16 * 60_000L) {
                 c = 9.0;                                       // 09:46
+            } else if (t == T_0930 + 17 * 60_000L) {
+                c = 8.0;                                       // 09:47
             } else if (t < T_1600) {
-                c = 8.0;                                       // 09:47 then filled
+                c = 9.83;                                      // 09:48 then filled
             } else {
                 c = 8.5;                                       // 16:00 closing print then filled
             }
@@ -90,10 +96,11 @@ class ReplayTest {
             for (int i = 0; i < 15; i++) {
                 trades.add(trade(T_0930 + i * 60_000L + 100, 10.0, false));
             }
-            trades.add(trade(T_0930 + 15 * 60_000L + 100, 11.0, false));
+            trades.add(trade(T_0930 + 15 * 60_000L + 100, 10.02, false));
             trades.add(trade(T_0930 + 15 * 60_000L + 200, 50.0, true));        // odd lot, ignored
             trades.add(trade(T_0930 + 16 * 60_000L + 100, 9.0, false));
             trades.add(trade(T_0930 + 17 * 60_000L + 100, 8.0, false));
+            trades.add(trade(T_0930 + 18 * 60_000L + 100, 9.83, false));
             trades.add(trade(T_1600 + 10, 8.5, false));
             reply(ex, "{\"results\":[" + String.join(",", trades) + "]}");
         });
@@ -127,39 +134,43 @@ class ReplayTest {
     }
 
     @Test
-    void chartModePrintsOneTrendPerMinuteAndLeavesWindowsAloneOnEmptyMinutes() throws Exception {
+    void chartModePrintsOnlyEntrySignalsAndLeavesWindowsAloneOnEmptyMinutes() throws Exception {
         Replay replay = new Replay(client, new PrintStream(console, true, StandardCharsets.UTF_8));
 
         Replay.Result r = replay.run(new Replay.Options("RIVN", DAY, false, false, null));
 
-        assertEquals(375, r.signals().size());                 // 09:45 .. 15:59
+        assertEquals(375, r.signals().size());                 // 09:45 .. 15:59 classified
         assertEquals(T_0930 + 15 * 60_000L, r.signals().get(0).barStartMs());
         assertEquals(T_1600 - 60_000L, r.signals().get(374).barStartMs());
-        // 09:45: 20=10.05 50=10.02 200=10.005, price 11 -> up
+        // 09:45: 20=10.001 50=10.0004 200=10.0001, price 10.02 -> up, 1.9 cents above the 20 -> BUY LONG
         assertEquals(Trend.UP, r.signals().get(0).trend());
-        assertEquals(10.05, r.signals().get(0).atClose().sma20(), 1e-9);
-        // 09:46: all three averages are exactly 10 -> ties -> none
-        assertEquals(Trend.NONE, r.signals().get(1).trend());
-        // 09:47: 20=9.9 50=9.96 200=9.99, price 8 -> down
+        assertEquals(Optional.of(Action.BUY_LONG), r.signals().get(0).action());
+        assertEquals(10.001, r.signals().get(0).atClose().sma20(), 1e-9);
+        // 09:46: 20=9.951 50=9.9804 200=9.995, price 9 -> down, far below the 20 -> no signal
+        assertEquals(Trend.DOWN, r.signals().get(1).trend());
+        assertEquals(Optional.empty(), r.signals().get(1).action());
+        // 09:47: price 8 -> down, no signal
         assertEquals(Trend.DOWN, r.signals().get(2).trend());
-        // No trades until 16:00: every later minute repeats the 09:47 state, nothing rolls into the windows.
-        assertEquals(Trend.DOWN, r.signals().get(10).trend());
-        assertEquals(Trend.DOWN, r.signals().get(374).trend());
-        assertEquals(9.9, r.signals().get(374).atClose().sma20(), 1e-9);
-        assertEquals(19, r.barsClosed());                       // 09:30 .. 09:47 and 16:00
-        assertEquals(960 - 19, r.emptyMinutes());
-        assertEquals(21, r.tradesSeen());
-        assertEquals(19, r.tradesApplied());
+        assertEquals(Optional.empty(), r.signals().get(2).action());
+        // 09:48: 20=9.8425, price 9.83 -> down, 1.25 cents below -> SHORT SELL
+        assertEquals(Trend.DOWN, r.signals().get(3).trend());
+        assertEquals(Optional.of(Action.SHORT_SELL), r.signals().get(3).action());
+        assertEquals(9.8425, r.signals().get(3).atClose().sma20(), 1e-9);
+        // No trades until 16:00: every later minute repeats the 09:48 state, nothing rolls into the windows.
+        assertEquals(Optional.of(Action.SHORT_SELL), r.signals().get(374).action());
+        assertEquals(9.8425, r.signals().get(374).atClose().sma20(), 1e-9);
+        assertEquals(20, r.barsClosed());                       // 09:30 .. 09:48 and 16:00
+        assertEquals(960 - 20, r.emptyMinutes());
+        assertEquals(22, r.tradesSeen());
+        assertEquals(20, r.tradesApplied());
         assertTrue(r.oracleChecks().isEmpty());
 
         String[] lines = console.toString(StandardCharsets.UTF_8).split("\\R");
-        assertEquals("09:45 up", lines[0]);
-        assertEquals("09:46 none", lines[1]);
-        assertEquals("09:47 down", lines[2]);
-        assertEquals("15:59 down", lines[374]);
-        assertEquals("RIVN 2026-10-16: 375 minutes, up 1, down 373, none 1 (21 trades, 19 applied, 19 bars, 941 empty minutes)", lines[375]);
-        assertEquals(376, lines.length);
-        assertFalse(console.toString(StandardCharsets.UTF_8).contains("09:44"));
+        assertEquals("09:45 BUY LONG", lines[0]);
+        assertEquals("09:48 SHORT SELL", lines[1]);
+        assertEquals("15:59 SHORT SELL", lines[lines.length - 1]);
+        assertEquals(1 + 372, lines.length);                    // one BUY LONG, SHORT SELL from 09:48 to 15:59, no summary
+        assertFalse(console.toString(StandardCharsets.UTF_8).contains("none"));
     }
 
     @Test
@@ -171,9 +182,9 @@ class ReplayTest {
         // Same answers here because the previous day was flat at 10, but only 390 minutes per day exist
         // and the 16:00 closing print falls outside the session.
         assertEquals(375, r.signals().size());
-        assertEquals(Trend.UP, r.signals().get(0).trend());
-        assertEquals(18, r.barsClosed());
-        assertEquals(390 - 18, r.emptyMinutes());
+        assertEquals(Optional.of(Action.BUY_LONG), r.signals().get(0).action());
+        assertEquals(19, r.barsClosed());
+        assertEquals(390 - 19, r.emptyMinutes());
     }
 
     @Test
@@ -191,16 +202,19 @@ class ReplayTest {
         assertTrue(r.allOraclesPass());
 
         String out = console.toString(StandardCharsets.UTF_8);
-        assertTrue(out.contains("09:45 up    px=11.0000    sma20=10.0500    sma50=10.0200    sma200=10.0050"), out);
+        assertTrue(out.contains("09:45 up   BUY LONG   px=10.0200    sma20=10.0010    sma50=10.0004    sma200=10.0001"), out);
+        assertTrue(out.contains("09:46 down            px=9.0000"), out);
+        assertTrue(out.contains("minutes, up 1, down "), out);
         assertTrue(out.contains("960/960  bars match"), out);
         assertEquals(960, r.barsClosed());
         assertFalse(out.contains("FAIL"), out);
 
         List<String> lines = Files.readAllLines(csv);
-        assertEquals("time_et,sip_timestamp_ns,price,size,sma20,sma50,sma200,trend", lines.get(0));
-        assertEquals(20, lines.size());
+        assertEquals("time_et,sip_timestamp_ns,price,size,sma20,sma50,sma200,trend,action", lines.get(0));
+        assertEquals(21, lines.size());
         assertTrue(lines.get(16).startsWith("09:45:00.100,"), lines.get(16));
-        assertTrue(lines.get(16).endsWith(",up"), lines.get(16));
+        assertTrue(lines.get(16).endsWith(",up,BUY LONG"), lines.get(16));
+        assertTrue(lines.get(17).endsWith(",down,"), lines.get(17));
     }
 
     @Test
@@ -218,7 +232,7 @@ class ReplayTest {
         assertEquals(0, sma20.barsMatched());
         assertEquals(959, sma20.barsMissingFromMassive());
         assertEquals(T_0930 + 15 * 60_000L, sma20.examples().get(0).barStartMs());
-        assertTrue(console.toString(StandardCharsets.UTF_8).contains("09:45 engine=10.050000 massive=99.000000"), console.toString());
+        assertTrue(console.toString(StandardCharsets.UTF_8).contains("09:45 engine=10.001000 massive=99.000000"), console.toString());
     }
 
     private static void reply(HttpExchange ex, String body) throws IOException {

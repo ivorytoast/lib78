@@ -21,12 +21,11 @@ public final class Main {
                    lib78 at     <TICKER[,TICKER...]> <MM/DD/YYYY-HH:MM>
 
             replay  Replays one past trading day trade by trade on one-minute bars. Directly after
-                    each minute closes, from 09:45 through 15:59 Eastern, prints the minute and
-                    "up", "down" or "none":
-                      up    200 below 50, 50 below 20, and the price above the 20
-                      down  200 above 50, 50 above 20, and the price below the 20
-                      none  anything else (ties included)
-                    Pre-market bars still feed the averages; they are just not printed.
+                    each minute closes, from 09:45 through 15:59 Eastern, prints the minute when
+                    there is an entry signal:
+                      BUY LONG    200 below 50, 50 below 20, price above the 20 by at most 2 cents
+                      SHORT SELL  200 above 50, 50 above 20, price below the 20 by at most 2 cents
+                    Nothing else is printed. Pre-market bars still feed the averages.
                     With no date, the most recent completed trading day is used.
             at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),
                     using the last trade at or before that minute. Example: at SPY 10/16/2026-12:12
@@ -34,7 +33,8 @@ public final class Main {
             options:
               --session <HH:MM-HH:MM>  daily window of bars the averages run on, Eastern time
                                        (default 04:00-20:00; a minute with no trade has no bar)
-              --verbose     replay: append price and the three averages to each printed minute
+              --verbose     replay: print every minute with its up/down/none zone, any signal,
+                            the price and the three averages, plus a summary line
               --verify      replay: run on Massive's filled 04:00-20:00 series instead and compare
                             every completed bar with Massive's own minute SMA endpoint
               --csv <path>  replay: write every close-updating trade and its SMA values to a CSV

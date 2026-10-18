@@ -72,44 +72,46 @@ java -jar target/lib78.jar replay SPY,QQQ,IWM --verbose --verify --csv out.csv
 With no date the most recent completed trading day is replayed. The run loads
 the previous week of minute bars so the 200 bar window is full from the first
 trade, then streams every trade of the day in time order. Directly after each
-minute closes, from 09:45 through 15:59 Eastern, it prints the minute and one
-of three words:
+minute closes, from 09:45 through 15:59 Eastern, it classifies the minute:
 
-| word | meaning |
+| zone | meaning |
 |---|---|
-| `up`   | 200 below 50, 50 below 20, and the price above the 20 |
-| `down` | 200 above 50, 50 above 20, and the price below the 20 |
-| `none` | anything else, ties included |
+| up   | 200 below 50, 50 below 20, and the price above the 20 |
+| down | 200 above 50, 50 above 20, and the price below the 20 |
+| none | anything else, ties included |
+
+and prints the minute only when the zone gives an entry signal:
+
+| printed | when |
+|---|---|
+| `BUY LONG`   | up zone and the price is at most 2 cents above the 20 |
+| `SHORT SELL` | down zone and the price is at most 2 cents below the 20 |
 
 ```
-09:45 none
-09:46 none
+10:02 SHORT SELL
+10:03 SHORT SELL
+10:10 SHORT SELL
 ...
-09:58 down
-09:59 down
-10:00 none
-10:01 none
-10:02 down
-...
-15:59 none
-RIVN 2026-10-16: 375 minutes, up 0, down 249, none 126 (99,581 trades, 46,848 applied, 648 bars, 312 empty minutes)
+15:57 SHORT SELL
 ```
+
+The price and averages used for a minute are those at its close, meaning the
+last close-updating trade in it. Minutes before 09:45, including pre-market,
+still feed the averages; they are just never printed.
 
 `expected/RIVN-2026-10-16.txt` holds the full expected output for that day,
 derived independently from every trade of the day, so
 `replay RIVN 2026-10-16 | diff - expected/RIVN-2026-10-16.txt`
-should print nothing.
-
-The price and averages used for a minute are those at its close, meaning the
-last close-updating trade in it. Minutes before 09:45, including pre-market,
-still feed the averages; they are just not printed.
+should print nothing. RIVN fell all day, so it has 104 `SHORT SELL` lines and
+no `BUY LONG`.
 
 Options:
 
 - `--session HH:MM-HH:MM` sets the daily window of bars, e.g. `07:00-20:00`
   for a platform whose extended hours start at 07:00, or `09:30-16:00` for
   regular hours only.
-- `--verbose` appends the price and the three averages to each line.
+- `--verbose` prints every minute with its zone, any signal, the price and the
+  three averages, followed by a summary line.
 - `--verify` runs on Massive's filled series instead and compares the
   engine's three values at every completed bar with Massive's own
   `/v1/indicators/sma` minute values, reporting per window how many bars

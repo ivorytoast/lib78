@@ -3,6 +3,7 @@ package com.hamilla.replay;
 import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
+import com.hamilla.sma.Action;
 import com.hamilla.sma.MinuteBarTracker;
 import com.hamilla.sma.MovingAverages;
 import com.hamilla.sma.Session;
@@ -26,14 +27,17 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 
 /**
  * Replays one past trading day for one symbol, trade by trade, on the one-minute bar series.
- * Directly after each minute closes, from 09:45 through 15:59 Eastern, it prints the minute and
- * whether the 20/50/200 alignment and price say "up", "down" or "none". Earlier minutes, including
- * pre-market, still feed the averages; they are just not printed.
+ * Directly after each minute closes, from 09:45 through 15:59 Eastern, it classifies the 20/50/200
+ * alignment and price as "up", "down" or "none" and prints the minute when that gives an entry
+ * signal: "BUY LONG" in the up zone with the price within two cents above the 20, "SHORT SELL" in
+ * the down zone with the price within two cents below it. Nothing else is printed unless
+ * {@link Options#verbose()} is set. Earlier minutes, including pre-market, still feed the averages.
  *
  * <p>By default the bars are the chart series: the {@link Options#session()} window, with a bar
  * only for a minute that had a close-updating trade. With {@link Options#verify()} the replay
@@ -72,8 +76,8 @@ public final class Replay {
         }
     }
 
-    /** One printed minute. */
-    public record Signal(long barStartMs, Trend trend, SmaSnapshot atClose) {
+    /** One classified minute; {@code action} is empty when there is no entry signal. */
+    public record Signal(long barStartMs, Trend trend, Optional<Action> action, SmaSnapshot atClose) {
     }
 
     /** One bar where the engine and Massive disagree. */
@@ -102,6 +106,17 @@ public final class Replay {
             }
             for (Signal s : signals) {
                 counts.merge(s.trend(), 1L, Long::sum);
+            }
+            return counts;
+        }
+
+        public Map<Action, Long> actionCounts() {
+            Map<Action, Long> counts = new EnumMap<>(Action.class);
+            for (Action a : Action.values()) {
+                counts.put(a, 0L);
+            }
+            for (Signal s : signals) {
+                s.action().ifPresent(a -> counts.merge(a, 1L, Long::sum));
             }
             return counts;
         }
@@ -180,15 +195,23 @@ public final class Replay {
 
         Result result = new Result(symbol, date, collector.seen, collector.applied, collector.tracker.barsClosed(),
                 collector.tracker.emptyMinutes(), collector.signals, checks);
+        this.opts = opts;
         printSummary(result);
         return result;
     }
 
+    /** Options of the run in progress, for the summary. */
+    private Options opts;
+
     private void printSummary(Result r) {
-        Map<Trend, Long> counts = r.counts();
-        out.printf("%s %s: %d minutes, up %d, down %d, none %d (%,d trades, %,d applied, %,d bars, %,d empty minutes)%n",
-                r.symbol(), r.date(), r.signals().size(), counts.get(Trend.UP), counts.get(Trend.DOWN), counts.get(Trend.NONE),
-                r.tradesSeen(), r.tradesApplied(), r.barsClosed(), r.emptyMinutes());
+        if (opts.verbose()) {
+            Map<Trend, Long> counts = r.counts();
+            Map<Action, Long> actions = r.actionCounts();
+            out.printf("%s %s: %d minutes, up %d, down %d, none %d, buy long %d, short sell %d (%,d trades, %,d applied, %,d bars, %,d empty minutes)%n",
+                    r.symbol(), r.date(), r.signals().size(), counts.get(Trend.UP), counts.get(Trend.DOWN), counts.get(Trend.NONE),
+                    actions.get(Action.BUY_LONG), actions.get(Action.SHORT_SELL),
+                    r.tradesSeen(), r.tradesApplied(), r.barsClosed(), r.emptyMinutes());
+        }
         if (r.oracleChecks().isEmpty()) {
             return;
         }
@@ -238,7 +261,7 @@ public final class Replay {
             }
             if (opts.csvOut() != null) {
                 csv = new PrintWriter(Files.newBufferedWriter(opts.csvOut(), StandardCharsets.UTF_8));
-                csv.println("time_et,sip_timestamp_ns,price,size,sma20,sma50,sma200,trend");
+                csv.println("time_et,sip_timestamp_ns,price,size,sma20,sma50,sma200,trend,action");
             } else {
                 csv = null;
             }
@@ -254,8 +277,9 @@ public final class Replay {
             if (csv != null) {
                 SmaSnapshot snap = maybe.get();
                 ZonedDateTime et = event.easternTime();
-                csv.printf(Locale.US, "%s,%d,%s,%s,%s,%s,%s,%s%n", et.format(TIME), event.sipTimestampNanos(),
-                        event.price(), event.size(), snap.sma20(), snap.sma50(), snap.sma200(), Trend.of(snap).label());
+                csv.printf(Locale.US, "%s,%d,%s,%s,%s,%s,%s,%s,%s%n", et.format(TIME), event.sipTimestampNanos(),
+                        event.price(), event.size(), snap.sma20(), snap.sma50(), snap.sma200(), Trend.of(snap).label(),
+                        Action.of(snap).map(Action::label).orElse(""));
             }
         }
 
@@ -263,12 +287,14 @@ public final class Replay {
         public void barClosed(long barStartMs, double close, SmaSnapshot atClose, boolean empty) {
             if (printed(barStartMs)) {
                 Trend trend = Trend.of(atClose);
-                signals.add(new Signal(barStartMs, trend, atClose));
+                Optional<Action> action = Action.of(atClose);
+                signals.add(new Signal(barStartMs, trend, action, atClose));
                 if (opts.verbose()) {
-                    out.printf(Locale.US, "%s %-4s  px=%-10.4f sma20=%-10.4f sma50=%-10.4f sma200=%-10.4f%n",
-                            barTime(barStartMs), trend.label(), atClose.price(), atClose.sma20(), atClose.sma50(), atClose.sma200());
-                } else {
-                    out.printf("%s %s%n", barTime(barStartMs), trend.label());
+                    out.printf(Locale.US, "%s %-4s %-10s px=%-10.4f sma20=%-10.4f sma50=%-10.4f sma200=%-10.4f%n",
+                            barTime(barStartMs), trend.label(), action.map(Action::label).orElse(""),
+                            atClose.price(), atClose.sma20(), atClose.sma50(), atClose.sma200());
+                } else if (action.isPresent()) {
+                    out.printf("%s %s%n", barTime(barStartMs), action.get().label());
                 }
             }
             if (!opts.verify()) {
