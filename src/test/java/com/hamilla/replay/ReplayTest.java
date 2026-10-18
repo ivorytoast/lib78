@@ -173,9 +173,9 @@ class ReplayTest {
         assertTrue(r.signals().get(9).printed());
         assertEquals(372 - 62, r.signalsHeldByCooldown());
         String[] lines = console.toString(StandardCharsets.UTF_8).split("\\R");
-        assertEquals("09:48 SHORT SELL", lines[0]);
-        assertEquals("09:54 SHORT SELL", lines[1]);
-        assertEquals("15:54 SHORT SELL", lines[lines.length - 1]);
+        assertEquals("09:48 SHORT SELL 9.83 9.91", lines[0]);  // RIVN: price, then price plus eight cents
+        assertEquals("09:54 SHORT SELL 9.83 9.91", lines[1]);
+        assertEquals("15:54 SHORT SELL 9.83 9.91", lines[lines.length - 1]);
         assertEquals(62, lines.length);                         // no summary line
         assertFalse(console.toString(StandardCharsets.UTF_8).contains("none"));
         assertFalse(console.toString(StandardCharsets.UTF_8).contains("BUY"));
@@ -190,7 +190,7 @@ class ReplayTest {
         assertEquals(0, r.signalsHeldByCooldown());
         String[] lines = console.toString(StandardCharsets.UTF_8).split("\\R");
         assertEquals(372, lines.length);
-        assertEquals("15:59 SHORT SELL", lines[371]);
+        assertEquals("15:59 SHORT SELL 9.83 9.91", lines[371]);
     }
 
     @Test

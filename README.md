@@ -88,12 +88,16 @@ and prints the minute only when the zone gives an entry signal:
 | `SHORT SELL` | down zone and the price is at most 2 cents below the 20 |
 
 ```
-10:02 SHORT SELL
-10:03 SHORT SELL
-10:10 SHORT SELL
+10:02 SHORT SELL 12.995 13.075
+10:10 SHORT SELL 12.98 13.06
+10:16 SHORT SELL 12.975 13.055
 ...
-15:57 SHORT SELL
+15:57 SHORT SELL 12.375 12.455
 ```
+
+Each line ends with the price at that minute's close and, for symbols with an
+offset configured in `SignalPrices` (currently RIVN at 8 cents), the price plus
+that offset.
 
 Once a signal prints, no signal prints until 6 minutes have passed (`--cooldown`
 changes the number; 0 prints every signal). The price and averages used for a

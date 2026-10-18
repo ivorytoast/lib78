@@ -25,6 +25,7 @@ public final class Main {
                     there is an entry signal:
                       BUY LONG    200 below 50, 50 below 20 by 3+ cents, price above the 20 by at most 2 cents
                       SHORT SELL  200 above 50, 50 above 20 by 3+ cents, price below the 20 by at most 2 cents
+                    Each line ends with the price and, for RIVN, the price plus 8 cents.
                     After a signal prints, none prints until --cooldown minutes have passed.
                     Nothing else is printed. Pre-market bars still feed the averages.
                     With no date, the most recent completed trading day is used.

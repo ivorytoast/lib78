@@ -7,6 +7,7 @@ import com.hamilla.sma.Action;
 import com.hamilla.sma.MinuteBarTracker;
 import com.hamilla.sma.MovingAverages;
 import com.hamilla.sma.Session;
+import com.hamilla.sma.SignalPrices;
 import com.hamilla.sma.SmaSnapshot;
 import com.hamilla.sma.Trend;
 
@@ -36,7 +37,8 @@ import java.util.TreeMap;
  * Directly after each minute closes, from 09:45 through 15:59 Eastern, it classifies the 20/50/200
  * alignment and price as "up", "down" or "none" and prints the minute when that gives an entry
  * signal: "BUY LONG" in the up zone with the price within two cents above the 20, "SHORT SELL" in
- * the down zone with the price within two cents below it. Nothing else is printed unless
+ * the down zone with the price within two cents below it, followed by the price and, for symbols
+ * with an offset in {@link SignalPrices}, the price plus that offset. Nothing else is printed unless
  * {@link Options#verbose()} is set. Earlier minutes, including pre-market, still feed the averages.
  *
  * <p>By default the bars are the chart series: the {@link Options#session()} window, with a bar
@@ -331,7 +333,8 @@ public final class Replay {
                             barTime(barStartMs), trend.label(), label,
                             atClose.price(), atClose.sma20(), atClose.sma50(), atClose.sma200());
                 } else if (print) {
-                    out.printf("%s %s%n", barTime(barStartMs), action.get().label());
+                    out.printf("%s %s %s%n", barTime(barStartMs), action.get().label(),
+                            SignalPrices.describe(atClose.symbol(), atClose.price()));
                 }
             }
             if (!opts.verify()) {
