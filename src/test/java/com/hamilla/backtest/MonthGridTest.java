@@ -61,6 +61,9 @@ class MonthGridTest {
         assertThrows(IllegalArgumentException.class, () -> MonthGrid.parseMonth("October"));
         assertEquals(List.of(0.08, 0.15, BracketSimulator.NONE), MonthGrid.parseLevels("0.08, 0.15, none"));
         assertThrows(IllegalArgumentException.class, () -> MonthGrid.parseLevels("0.08,-1"));
+        assertEquals(0.05, MonthGrid.parsePair("0.05,0.25")[0]);
+        assertEquals(BracketSimulator.NONE, MonthGrid.parsePair("none,0.09")[0]);
+        assertThrows(IllegalArgumentException.class, () -> MonthGrid.parsePair("0.05"));
     }
 
     @Test
@@ -86,7 +89,7 @@ class MonthGridTest {
 
         // September has no bars in the mock, so it contributes no signals; October has its one day.
         MonthGrid.Outcome o = grid.runAny(new MonthGrid.Options("RIVN", YearMonth.of(2026, 9), YearMonth.of(2026, 10),
-                Session.EXTENDED, 6, 0, List.of(0.08, 0.15), List.of(0.12, 0.40)));
+                Session.EXTENDED, 6, 0, List.of(0.08, 0.15), List.of(0.12, 0.40), List.of(new double[]{0.05, 0.25})));
 
         assertTrue(o.single() == null && o.multi() != null);
         Grid.MultiResult r = o.multi();
@@ -96,6 +99,8 @@ class MonthGridTest {
         String text = out.toString(StandardCharsets.UTF_8);
         assertTrue(text.contains("RIVN 2026-09 to 2026-10: 1 trading days"), text);
         assertTrue(text.contains("months positive (of 2)"), text);
+        assertTrue(text.contains("detail: stop 0.05, target 0.25"), text);
+        assertEquals(1, r.shown().size());
         assertThrows(IllegalArgumentException.class, () -> new MonthGrid.Options("RIVN", YearMonth.of(2026, 10),
                 YearMonth.of(2026, 9), Session.EXTENDED, 6, 0, null, null));
     }

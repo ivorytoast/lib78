@@ -71,7 +71,12 @@ public final class Grid {
                               BracketSimulator.Summary[][][] cells, double[][] total, double[][] worstMonth,
                               int[][] monthsPositive, double typicalRange, int signals, int shares,
                               Recommendation recommendation, Map<YearMonth, Double> recommendedByMonth,
-                              List<TimeBucket> byTime) {
+                              List<TimeBucket> byTime, List<CellDetail> shown) {
+    }
+
+    /** Everything about one stop-and-target pair, for a cell the user asked to see. */
+    public record CellDetail(double stop, double target, BracketSimulator.Summary summary, Map<YearMonth, Double> byMonth,
+                             List<TimeBucket> byTime) {
     }
 
     private final BracketSimulator simulator;
@@ -128,9 +133,17 @@ public final class Grid {
         return new Result(symbol, stops, targets, pnl, cells, typicalRange, signals.size(), shares, rec, byTime);
     }
 
-    /** Runs each month separately and aggregates. Months with no signals are left out of the consistency counts. */
     public MultiResult runMonths(String symbol, Map<YearMonth, List<TradeSignal>> signalsByMonth, List<Double> stops,
                                  List<Double> targets, double typicalRange, int shares) {
+        return runMonths(symbol, signalsByMonth, stops, targets, typicalRange, shares, List.of());
+    }
+
+    /**
+     * Runs each month separately and aggregates. Months with no signals are left out of the consistency
+     * counts. {@code show} names extra stop-and-target pairs whose detail is wanted regardless of the grid.
+     */
+    public MultiResult runMonths(String symbol, Map<YearMonth, List<TradeSignal>> signalsByMonth, List<Double> stops,
+                                 List<Double> targets, double typicalRange, int shares, List<double[]> show) {
         List<YearMonth> months = new ArrayList<>(signalsByMonth.keySet());
         int rows = stops.size();
         int cols = targets.size();
@@ -196,8 +209,17 @@ public final class Grid {
             }
             byTime = byTime(simulator.simulate(all, rec.stop(), rec.target(), shares));
         }
+        List<CellDetail> shown = new ArrayList<>();
+        for (double[] pair : show) {
+            Map<YearMonth, Double> byMonth = new LinkedHashMap<>();
+            for (YearMonth m : months) {
+                byMonth.put(m, simulator.summarize(signalsByMonth.get(m), pair[0], pair[1], shares).pnl());
+            }
+            shown.add(new CellDetail(pair[0], pair[1], simulator.summarize(all, pair[0], pair[1], shares), byMonth,
+                    byTime(simulator.simulate(all, pair[0], pair[1], shares))));
+        }
         return new MultiResult(symbol, months, stops, targets, cells, total, worst, positive, typicalRange,
-                all.size(), shares, rec, recByMonth, byTime);
+                all.size(), shares, rec, recByMonth, byTime, shown);
     }
 
     interface CellLookup {
@@ -309,27 +331,72 @@ public final class Grid {
         Recommendation rec = r.recommendation();
         if (rec == null) {
             out.println("recommendation: none (no finite cells)");
-            return;
-        }
-        BracketSimulator.Summary s = rec.summary();
-        int ri = r.stops().indexOf(rec.stop());
-        int rj = r.targets().indexOf(rec.target());
-        out.printf(Locale.US, "recommendation: stop %s, target %s%n", money(rec.stop()), money(rec.target()));
-        out.printf(Locale.US, "  total P&L %,.2f over %d trades: %d targets, %d stops, %d held to 15:55; worst trade %,.2f%n",
-                s.pnl(), s.trades(), s.targets(), s.stops(), s.held(), s.worstTrade());
-        StringBuilder monthly = new StringBuilder();
-        for (Map.Entry<YearMonth, Double> e : r.recommendedByMonth().entrySet()) {
-            if (monthly.length() > 0) {
-                monthly.append(", ");
+        } else {
+            BracketSimulator.Summary s = rec.summary();
+            int ri = r.stops().indexOf(rec.stop());
+            int rj = r.targets().indexOf(rec.target());
+            if (rec.score() < 0) {
+                out.println("recommendation: none. No setting is steadily positive: for every cell the month-to-month swing"
+                        + " exceeds the average month.");
+                out.printf(Locale.US, "  least unsteady: stop %s, target %s (score %,.0f); the strongest totals are:%n",
+                        money(rec.stop()), money(rec.target()), rec.score());
+                for (int[] c : topByTotal(r, 3)) {
+                    out.printf(Locale.US, "    stop %s, target %s: total %,.0f, worst month %,.0f, %d of %d months positive%n",
+                            level(r.stops().get(c[0])), level(r.targets().get(c[1])), r.total()[c[0]][c[1]],
+                            r.worstMonth()[c[0]][c[1]], r.monthsPositive()[c[0]][c[1]], n);
+                }
+            } else {
+                out.printf(Locale.US, "recommendation: stop %s, target %s%n", money(rec.stop()), money(rec.target()));
+                out.printf(Locale.US, "  total P&L %,.2f over %d trades: %d targets, %d stops, %d held to 15:55; worst trade %,.2f%n",
+                        s.pnl(), s.trades(), s.targets(), s.stops(), s.held(), s.worstTrade());
+                out.printf(Locale.US, "  by month: %s%n", monthly(r.recommendedByMonth()));
+                out.printf(Locale.US, "  worst month %,.0f, %d of %d months positive%n", r.worstMonth()[ri][rj], r.monthsPositive()[ri][rj], n);
+                out.printf(Locale.US, "  chosen by mean monthly P&L minus its standard deviation (%,.0f here), smoothed over neighbouring cells,%n"
+                        + "  so a setting that earns steadily beats one that earns once%n", rec.score());
+                printCharacter(rec, out);
+                printByTime(r.byTime(), out);
             }
-            monthly.append(e.getKey()).append(' ').append(String.format(Locale.US, "%+,.0f", e.getValue()));
         }
-        out.printf(Locale.US, "  by month: %s%n", monthly);
-        out.printf(Locale.US, "  worst month %,.0f, %d of %d months positive%n", r.worstMonth()[ri][rj], r.monthsPositive()[ri][rj], n);
-        out.printf(Locale.US, "  chosen by mean monthly P&L minus its standard deviation (%,.0f here), smoothed over neighbouring cells,%n"
-                + "  so a setting that earns steadily beats one that earns once%n", rec.score());
-        printCharacter(rec, out);
-        printByTime(r.byTime(), out);
+        for (CellDetail d : r.shown()) {
+            BracketSimulator.Summary s = d.summary();
+            out.println();
+            out.printf(Locale.US, "detail: stop %s, target %s%n", level(d.stop()), level(d.target()));
+            out.printf(Locale.US, "  total P&L %,.2f over %d trades: %d targets, %d stops, %d held to 15:55; worst trade %,.2f%n",
+                    s.pnl(), s.trades(), s.targets(), s.stops(), s.held(), s.worstTrade());
+            out.printf(Locale.US, "  by month: %s%n", monthly(d.byMonth()));
+            double worst = d.byMonth().values().stream().mapToDouble(Double::doubleValue).min().orElse(0);
+            long positive = d.byMonth().values().stream().filter(v -> v > 0).count();
+            out.printf(Locale.US, "  worst month %,.0f, %d of %d months positive%n", worst, positive, n);
+            if (d.stop() < BracketSimulator.NONE && d.target() < BracketSimulator.NONE) {
+                printCharacter(new Recommendation(d.stop(), d.target(), s, 0), out);
+            }
+            printByTime(d.byTime(), out);
+        }
+    }
+
+    private static String monthly(Map<YearMonth, Double> byMonth) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<YearMonth, Double> e : byMonth.entrySet()) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(e.getKey()).append(' ').append(String.format(Locale.US, "%+,.0f", e.getValue()));
+        }
+        return sb.toString();
+    }
+
+    /** Row and column of the {@code k} finite cells with the largest total, best first. */
+    static List<int[]> topByTotal(MultiResult r, int k) {
+        List<int[]> cells = new ArrayList<>();
+        for (int i = 0; i < r.stops().size(); i++) {
+            for (int j = 0; j < r.targets().size(); j++) {
+                if (r.stops().get(i) < BracketSimulator.NONE && r.targets().get(j) < BracketSimulator.NONE) {
+                    cells.add(new int[]{i, j});
+                }
+            }
+        }
+        cells.sort((a, b) -> Double.compare(r.total()[b[0]][b[1]], r.total()[a[0]][a[1]]));
+        return cells.subList(0, Math.min(k, cells.size()));
     }
 
     private static void printCharacter(Recommendation rec, PrintStream out) {

@@ -179,6 +179,11 @@ by entry time follow:
 java -jar target/lib78.jar grid RIVN 2026-01 2026-10
 ```
 
+When no cell is steadily positive, the recommendation says so and lists the
+three strongest totals instead. `--show 0.05,0.25` (repeatable) prints any
+pair's month-by-month P&L and time-of-day breakdown, whether or not the grid
+contains it.
+
 Options: `--shares N` (default: the symbol's configured size in
 `SymbolSettings`, else 100), `--stops 0.05,0.10,none` and
 `--targets 0.10,0.20,none` to test your own levels (defaults are multiples of

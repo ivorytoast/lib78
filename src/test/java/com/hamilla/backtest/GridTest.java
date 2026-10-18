@@ -56,7 +56,8 @@ class GridTest {
         byMonth.put(java.time.YearMonth.of(2026, 10), signals);
 
         Grid.MultiResult r = new Grid(new BracketSimulator(bars)).runMonths("RIVN", byMonth,
-                List.of(0.08, 0.15, BracketSimulator.NONE), List.of(0.12, 0.40, BracketSimulator.NONE), 0.02, 2000);
+                List.of(0.08, 0.15, BracketSimulator.NONE), List.of(0.12, 0.40, BracketSimulator.NONE), 0.02, 2000,
+                List.of(new double[]{0.08, 0.12}, new double[]{0.05, BracketSimulator.NONE}));
 
         assertEquals(3, r.months().size());
         assertEquals(2 * 2480.0, r.total()[0][0], 1e-6);
@@ -80,6 +81,39 @@ class GridTest {
         assertTrue(text.contains("by month: 2026-08 +"), text);
         assertTrue(text.contains("chosen by mean monthly P&L minus its standard deviation"), text);
         assertTrue(text.contains("by entry time, with these brackets:"), text);
+        // The two requested cells are detailed after the recommendation.
+        assertEquals(2, r.shown().size());
+        assertEquals(2480.0, r.shown().get(0).byMonth().get(java.time.YearMonth.of(2026, 8)), 1e-6);
+        assertTrue(text.contains("detail: stop 0.08, target 0.12"), text);
+        assertTrue(text.contains("detail: stop 0.05, target none"), text);
+        assertTrue(text.contains("by month: 2026-08 +2,480, 2026-09 +0, 2026-10 +2,480"), text);
+    }
+
+    @Test
+    void negativeScoreIsReportedAsNoRecommendationWithTheStrongestTotals() {
+        List<MinuteBar> bars = Bars.rivnOct15and16();
+        Set<LocalDate> days = Set.of(LocalDate.of(2026, 10, 16));
+        List<TradeSignal> signals = new SignalGenerator(Session.EXTENDED, 6).generate("RIVN", bars, days);
+        // One good month and one month whose signals are the same trades but shorted at a loss: make the
+        // second month a mirror by flipping every signal to BUY LONG, so every cell swings wildly.
+        List<TradeSignal> flipped = new java.util.ArrayList<>();
+        for (TradeSignal s : signals) {
+            flipped.add(new TradeSignal(s.barStartMs(), com.hamilla.sma.Action.BUY_LONG, s.price()));
+        }
+        java.util.Map<java.time.YearMonth, List<TradeSignal>> byMonth = new java.util.LinkedHashMap<>();
+        byMonth.put(java.time.YearMonth.of(2026, 9), signals);
+        byMonth.put(java.time.YearMonth.of(2026, 10), flipped);
+
+        Grid.MultiResult r = new Grid(new BracketSimulator(bars)).runMonths("RIVN", byMonth,
+                List.of(0.08, 0.15, BracketSimulator.NONE), List.of(0.12, 0.40, BracketSimulator.NONE), 0.02, 2000);
+        assertTrue(r.recommendation().score() < 0, "score " + r.recommendation().score());
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Grid.print(r, new PrintStream(out, true, StandardCharsets.UTF_8));
+        String text = out.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("recommendation: none. No setting is steadily positive"), text);
+        assertTrue(text.contains("the strongest totals are:"), text);
+        assertEquals(3, Grid.topByTotal(r, 3).size());
     }
 
     @Test

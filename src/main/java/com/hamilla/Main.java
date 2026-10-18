@@ -59,6 +59,8 @@ public final class Main {
               --stops <a,b,...>    grid: stop sizes in dollars to test ("none" allowed)
               --targets <a,b,...>  grid: target sizes in dollars to test ("none" allowed)
                             (defaults for both are multiples of the typical one-minute range)
+              --show <stop,target>  grid over a range: print that pair's month-by-month P&L and
+                            time-of-day breakdown; may be repeated
 
             environment:
               MASSIVE_API_KEY          required
@@ -217,6 +219,7 @@ public final class Main {
         int shares = 0;
         List<Double> stops = null;
         List<Double> targets = null;
+        List<double[]> show = new ArrayList<>();
         try {
             for (int i = firstOption; i < args.length; i++) {
                 switch (args[i]) {
@@ -224,6 +227,7 @@ public final class Main {
                     case "--shares" -> shares = Integer.parseInt(requireValue(args, ++i));
                     case "--stops" -> stops = MonthGrid.parseLevels(requireValue(args, ++i));
                     case "--targets" -> targets = MonthGrid.parseLevels(requireValue(args, ++i));
+                    case "--show" -> show.add(MonthGrid.parsePair(requireValue(args, ++i)));
                     default -> {
                         System.err.println("unknown option " + args[i]);
                         return 2;
@@ -239,7 +243,7 @@ public final class Main {
         }
         try {
             new MonthGrid(clientOrExit(), System.out).runAny(
-                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, cooldown, shares, stops, targets));
+                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, cooldown, shares, stops, targets, show));
             return 0;
         } catch (IllegalArgumentException e) {
             System.err.println("error: " + e.getMessage());

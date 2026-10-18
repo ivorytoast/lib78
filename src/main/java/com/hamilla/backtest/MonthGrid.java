@@ -37,10 +37,15 @@ public final class MonthGrid {
      * @param targets   explicit target levels, or null for defaults
      */
     public record Options(String symbol, YearMonth month, YearMonth toMonth, Session session, int cooldown, int shares,
-                          List<Double> stops, List<Double> targets) {
+                          List<Double> stops, List<Double> targets, List<double[]> show) {
         public Options(String symbol, YearMonth month, Session session, int cooldown, int shares,
                        List<Double> stops, List<Double> targets) {
-            this(symbol, month, null, session, cooldown, shares, stops, targets);
+            this(symbol, month, null, session, cooldown, shares, stops, targets, List.of());
+        }
+
+        public Options(String symbol, YearMonth month, YearMonth toMonth, Session session, int cooldown, int shares,
+                       List<Double> stops, List<Double> targets) {
+            this(symbol, month, toMonth, session, cooldown, shares, stops, targets, List.of());
         }
 
         public Options {
@@ -69,6 +74,15 @@ public final class MonthGrid {
         } catch (DateTimeParseException e) {
             throw new IllegalArgumentException("month must look like 2026-10 or 10/2026, got '" + text + "'", e);
         }
+    }
+
+    /** Parses {@code stop,target}, e.g. {@code 0.05,0.25} or {@code none,0.09}. */
+    public static double[] parsePair(String text) {
+        List<Double> levels = parseLevels(text);
+        if (levels.size() != 2) {
+            throw new IllegalArgumentException("--show needs a stop and a target, e.g. 0.05,0.25, got '" + text + "'");
+        }
+        return new double[]{levels.get(0), levels.get(1)};
     }
 
     public static List<Double> parseLevels(String text) {
@@ -161,7 +175,7 @@ public final class MonthGrid {
         for (TradeSignal s : signals) {
             byMonth.get(YearMonth.from(s.date())).add(s);
         }
-        Grid.MultiResult result = grid.runMonths(opts.symbol(), byMonth, stops, targets, range, shares);
+        Grid.MultiResult result = grid.runMonths(opts.symbol(), byMonth, stops, targets, range, shares, opts.show());
         Grid.print(result, out);
         return new Outcome(null, result);
     }
