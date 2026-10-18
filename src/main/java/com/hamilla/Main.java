@@ -1,5 +1,6 @@
 package com.hamilla;
 
+import com.hamilla.backtest.MonthGrid;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
 import com.hamilla.query.PointInTime;
@@ -10,6 +11,7 @@ import com.hamilla.sma.Session;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +21,7 @@ public final class Main {
     private static final String USAGE = """
             usage: lib78 replay <TICKER[,TICKER...]> [YYYY-MM-DD] [options]
                    lib78 at     <TICKER[,TICKER...]> <MM/DD/YYYY-HH:MM>
+                   lib78 grid   <TICKER> <YYYY-MM> [options]
 
             replay  Replays one past trading day trade by trade on one-minute bars. Directly after
                     each minute closes, from 09:45 through 15:59 Eastern, prints the minute when
@@ -33,6 +36,10 @@ public final class Main {
                     With no date, the most recent completed trading day is used.
             at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),
                     using the last trade at or before that minute. Example: at SPY 10/16/2026-12:12
+            grid    Generates every completed trading day's signals for the month, then prints the
+                    total P&L for each stop-and-target pair (entry at the signal price, brackets
+                    filled on the minute's high or low, the rest closed at 15:55) and a recommended
+                    pair chosen from the most consistent region of the table.
 
             options:
               --session <HH:MM-HH:MM>  daily window of bars the averages run on, Eastern time
@@ -45,6 +52,10 @@ public final class Main {
                             every completed bar with Massive's own minute SMA endpoint
               --csv <path>  replay: write every close-updating trade and its SMA values to a CSV
                             file (with several tickers, the ticker is inserted before the extension)
+              --shares <n>  grid: shares per trade (default: the symbol's configured size, else 100)
+              --stops <a,b,...>    grid: stop sizes in dollars to test ("none" allowed)
+              --targets <a,b,...>  grid: target sizes in dollars to test ("none" allowed)
+                            (defaults for both are multiples of the typical one-minute range)
 
             environment:
               MASSIVE_API_KEY          required
@@ -52,7 +63,7 @@ public final class Main {
             """;
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 2 || !(args[0].equals("replay") || args[0].equals("at"))) {
+        if (args.length < 2 || !(args[0].equals("replay") || args[0].equals("at") || args[0].equals("grid"))) {
             System.err.print(USAGE);
             System.exit(2);
         }
@@ -82,6 +93,9 @@ public final class Main {
 
         if (args[0].equals("at")) {
             System.exit(at(symbols, session, args));
+        }
+        if (args[0].equals("grid")) {
+            System.exit(grid(symbols, session, args));
         }
         LocalDate date = null;
         int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
@@ -171,6 +185,51 @@ public final class Main {
             }
         }
         return failures == 0 ? 0 : 1;
+    }
+
+    private static int grid(List<String> symbols, Session session, String[] args) throws Exception {
+        if (symbols.size() != 1 || args.length < 3) {
+            System.err.println("grid needs one ticker and a month, e.g. grid RIVN 2026-10");
+            return 2;
+        }
+        YearMonth month;
+        try {
+            month = MonthGrid.parseMonth(args[2]);
+        } catch (IllegalArgumentException e) {
+            System.err.println("error: " + e.getMessage());
+            return 2;
+        }
+        int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
+        int shares = 0;
+        List<Double> stops = null;
+        List<Double> targets = null;
+        try {
+            for (int i = 3; i < args.length; i++) {
+                switch (args[i]) {
+                    case "--cooldown" -> cooldown = Integer.parseInt(requireValue(args, ++i));
+                    case "--shares" -> shares = Integer.parseInt(requireValue(args, ++i));
+                    case "--stops" -> stops = MonthGrid.parseLevels(requireValue(args, ++i));
+                    case "--targets" -> targets = MonthGrid.parseLevels(requireValue(args, ++i));
+                    default -> {
+                        System.err.println("unknown option " + args[i]);
+                        return 2;
+                    }
+                }
+            }
+            if (cooldown < 0 || shares < 0) {
+                throw new IllegalArgumentException("cooldown and shares must not be negative");
+            }
+        } catch (IllegalArgumentException e) {
+            System.err.println("error: " + e.getMessage());
+            return 2;
+        }
+        try {
+            new MonthGrid(clientOrExit(), System.out).run(new MonthGrid.Options(symbols.get(0), month, session, cooldown, shares, stops, targets));
+            return 0;
+        } catch (IOException e) {
+            System.err.println("error: " + e.getMessage());
+            return 1;
+        }
     }
 
     private static MassiveClient clientOrExit() {

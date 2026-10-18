@@ -128,6 +128,50 @@ Options:
   is 1 if any window fails.
 - `--csv <path>` writes every close-updating trade with its averages and trend.
 
+## Find the best stop and target for a month
+
+```
+java -jar target/lib78.jar grid RIVN 2026-10
+```
+
+generates every completed trading day's signals for the month, simulates each
+one with every combination of stop and target, and prints the total P&L table
+followed by a recommendation:
+
+```
+RIVN 2026-10: 12 trading days (2026-10-01 to 2026-10-16), 94 signals
+RIVN: 94 signals, 2000 shares per trade, typical regular-hours minute range 0.03
+
+stop \ target      0.05      0.06      0.09      0.12      0.18      0.24      none
+0.03          ...
+...
+
+recommendation: stop 0.15, target 0.40
+  P&L 8,347.00 over 94 trades: 10 targets, 23 stops, 61 held to 15:55; worst trade -300.00
+  chosen for its neighbourhood: the surrounding cells average 8,102, so it sits on a plateau, not a spike
+  risk/reward 2.67 to 1: breakeven win rate 27%, actual 30%
+  this is a trend bet: ...
+```
+
+Each trade enters at the signal price when the next minute opens. A later
+minute whose range reaches the stop fills it at the stop; one that reaches the
+target fills at the target; whichever comes first wins, and a minute touching
+both counts as the stop. Anything still open closes at the 15:55 price, and
+signals from 15:54 on are skipped. Signals come from minute bars rather than
+trades, which gives the same answers as the replay (the tests prove it on a
+real day) in seconds instead of minutes.
+
+The recommendation is the finite cell whose 3-by-3 neighbourhood averages
+highest, so it sits on a plateau rather than a one-cell spike. The printout
+also states the breakeven win rate, whether the pair is a trend bet or a
+scalp, and warnings when one day dominates the result or the sample is small.
+
+Options: `--shares N` (default: the symbol's configured size in
+`SymbolSettings`, else 100), `--stops 0.05,0.10,none` and
+`--targets 0.10,0.20,none` to test your own levels (defaults are multiples of
+the month's typical one-minute range), plus `--cooldown` and `--session` as
+for the replay.
+
 ## Tests
 
 ```
