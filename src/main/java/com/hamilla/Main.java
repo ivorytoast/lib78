@@ -19,16 +19,22 @@ public final class Main {
             usage: lib78 replay <TICKER[,TICKER...]> [YYYY-MM-DD] [options]
                    lib78 at     <TICKER[,TICKER...]> <MM/DD/YYYY-HH:MM>
 
-            replay  Replays one past trading day trade by trade and reports the 20/50/200 minute-bar
-                    SMAs, checking every completed bar against Massive's own minute SMA values.
+            replay  Replays one past trading day trade by trade on one-minute bars. Directly after
+                    each minute closes, from 09:45 through 15:59 Eastern, prints the minute and
+                    "up", "down" or "none":
+                      up    200 below 50, 50 below 20, and the price above the 20
+                      down  200 above 50, 50 above 20, and the price below the 20
+                      none  anything else (ties included)
+                    Pre-market bars still feed the averages; they are just not printed.
                     With no date, the most recent completed trading day is used.
             at      Prints the price and the 20/50/200 minute-bar SMAs at one moment (Eastern time),
                     using the last trade at or before that minute. Example: at SPY 10/16/2026-12:12
 
             replay options:
-              --print-every <minutes>  console line every N minutes (default 30, 0 = off)
-              --csv <path>             write every trade and its SMA values to a CSV file
-                                       (with several tickers, the ticker is inserted before the extension)
+              --verbose     append price and the three averages to each printed minute
+              --verify      also compare every completed bar with Massive's own minute SMA endpoint
+              --csv <path>  write every close-updating trade and its SMA values to a CSV file
+                            (with several tickers, the ticker is inserted before the extension)
 
             environment:
               MASSIVE_API_KEY          required
@@ -52,12 +58,14 @@ public final class Main {
             System.exit(at(symbols, args));
         }
         LocalDate date = null;
-        int printEvery = 30;
+        boolean verbose = false;
+        boolean verify = false;
         Path csv = null;
 
         for (int i = 2; i < args.length; i++) {
             switch (args[i]) {
-                case "--print-every" -> printEvery = Integer.parseInt(requireValue(args, ++i));
+                case "--verbose" -> verbose = true;
+                case "--verify" -> verify = true;
                 case "--csv" -> csv = Path.of(requireValue(args, ++i));
                 default -> {
                     if (args[i].startsWith("--")) {
@@ -73,13 +81,17 @@ public final class Main {
         MassiveClient client = clientOrExit();
         Replay replay = new Replay(client, System.out);
         boolean allPass = true;
+        boolean first = true;
         for (String symbol : symbols) {
+            if (!first) {
+                System.out.println();
+            }
+            first = false;
             LocalDate day = date != null ? date
                     : TradingCalendar.previousTradingDay(client, symbol, LocalDate.now(PriceEvent.EASTERN));
             Path csvFor = csvFor(csv, symbol, symbols.size() > 1);
-            Replay.Result result = replay.run(new Replay.Options(symbol, day, printEvery, csvFor));
+            Replay.Result result = replay.run(new Replay.Options(symbol, day, verbose, verify, csvFor));
             allPass &= result.allOraclesPass();
-            System.out.println();
         }
         System.exit(allPass ? 0 : 1);
     }

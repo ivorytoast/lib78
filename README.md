@@ -60,22 +60,50 @@ a weekend or before the 04:00 pre-market open, is reported as an error.
 
 ```
 java -jar target/lib78.jar replay RIVN 2026-10-16
-java -jar target/lib78.jar replay SPY,QQQ,IWM --print-every 15 --csv out.csv
+java -jar target/lib78.jar replay SPY,QQQ,IWM --verbose --verify --csv out.csv
 ```
 
-With no date the most recent completed trading day is replayed. The run
+With no date the most recent completed trading day is replayed. The run loads
+the previous week of minute bars so the 200 bar window is full from the first
+trade, then streams every trade of the day in time order. Directly after each
+minute closes, from 09:45 through 15:59 Eastern, it prints the minute and one
+of three words:
 
-1. loads the previous week of minute bars so the 200 bar window is full from
-   the first trade,
-2. streams every trade of the day in time order and updates the averages on
-   each close-updating trade,
-3. prints a console line every `--print-every` minutes and, with `--csv`,
-   writes every applied trade and its SMA values to a file,
-4. checks the engine's value at every completed bar against Massive's own
-   `/v1/indicators/sma` minute values and prints, per window, how many bars
-   matched, the largest difference, and the first few mismatches.
+| word | meaning |
+|---|---|
+| `up`   | 200 below 50, 50 below 20, and the price above the 20 |
+| `down` | 200 above 50, 50 above 20, and the price below the 20 |
+| `none` | anything else, ties included |
 
-The exit code is 0 when every bar matches for all three windows.
+```
+09:45 down
+09:46 down
+...
+10:00 none
+10:01 none
+10:02 down
+...
+15:59 none
+RIVN 2026-10-16: 375 minutes, up 0, down 262, none 113 (99,581 trades, 46,848 applied, 960 bars)
+```
+
+`expected/RIVN-2026-10-16.txt` holds the full expected output for that day,
+derived independently from every trade of the day and Massive's minute SMA
+values, so `replay RIVN 2026-10-16 | diff - expected/RIVN-2026-10-16.txt`
+should print nothing.
+
+The price and averages used for a minute are those at its close, meaning the
+last close-updating trade in it. Minutes before 09:45, including pre-market,
+still feed the averages; they are just not printed.
+
+Options:
+
+- `--verbose` appends the price and the three averages to each line.
+- `--verify` also compares the engine's three values at every completed bar
+  with Massive's own `/v1/indicators/sma` minute values and reports, per
+  window, how many bars matched, the largest difference and the first few
+  mismatches. The exit code is 1 if any window fails.
+- `--csv <path>` writes every close-updating trade with its averages and trend.
 
 ## Tests
 
