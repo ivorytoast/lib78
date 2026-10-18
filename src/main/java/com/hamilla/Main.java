@@ -88,7 +88,18 @@ public final class Main {
 
         for (int i = 2; i < args.length; i++) {
             switch (args[i]) {
-                case "--cooldown" -> cooldown = Integer.parseInt(requireValue(args, ++i));
+                case "--cooldown" -> {
+                    String value = requireValue(args, ++i);
+                    try {
+                        cooldown = Integer.parseInt(value);
+                    } catch (NumberFormatException e) {
+                        cooldown = -1;
+                    }
+                    if (cooldown < 0) {
+                        System.err.println("error: --cooldown needs a whole number of minutes, 0 or more, got '" + value + "'");
+                        System.exit(2);
+                    }
+                }
                 case "--verbose" -> verbose = true;
                 case "--verify" -> verify = true;
                 case "--csv" -> csv = Path.of(requireValue(args, ++i));
