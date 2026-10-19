@@ -1,5 +1,35 @@
 # lib78
 
+## Today's book
+
+Before the open, once:
+
+```
+cd ~/lib78 && git pull && mvn -q package
+export MASSIVE_API_KEY=...
+```
+
+Then start this any time before 10:30 and leave it running:
+
+```
+java -jar target/lib78.jar live STLD,DIS,DRI,CB,BTU --window 10:30-12:30 --risk 500 --cap 100000 --book 400000 \
+  --bracket STLD=0.18/1.10 --bracket DIS=0.16/0.24 --bracket DRI=0.57/0.57 --bracket CB=0.81/1.20 --bracket BTU=0.09/0.14
+```
+
+It prints the header, `caught up to HH:MM, watching every 5 seconds...`, then
+one line per signal, skip and exit until the window has closed and nothing is
+open, when it prints the day's summary and exits on its own. It sends no
+orders; each line is the order for a person to place. See
+[Trade the book live](#trade-the-book-live) for what the lines mean.
+
+| | stop / target | about $100k buys | at (Oct 16) |
+|---|---|---|---|
+| STLD | 0.18 / 1.10 | 415 | $240.54 |
+| DIS  | 0.16 / 0.24 | 904 | $110.59 |
+| DRI  | 0.57 / 0.57 | 462 | $216.35 |
+| CB   | 0.81 / 1.20 | 277 | $359.79 |
+| BTU  | 0.09 / 0.14 | 4186 | $23.89 |
+
 Tracks the 20, 50 and 200 period simple moving averages of one-minute bars for
 US equities and ETFs, trade by trade, first by replaying a past day and later
 from the live feed. Market data comes from [Massive](https://massive.com).
