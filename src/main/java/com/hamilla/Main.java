@@ -9,6 +9,7 @@ import com.hamilla.massive.MassiveClient;
 import com.hamilla.query.PointInTime;
 import com.hamilla.replay.Replay;
 import com.hamilla.replay.TradingCalendar;
+import com.hamilla.sma.Band;
 import com.hamilla.sma.Session;
 import com.hamilla.sma.SignalWindow;
 
@@ -63,6 +64,10 @@ public final class Main {
                                        the 10:30 close is the first acted on, nothing opens from 14:30)
               --cooldown <minutes>  replay: minutes after a printed signal during which no signal
                             prints (default 6; 0 prints every signal)
+              --band <dollars|auto>  how close to the 20 a close must be for a signal (default 0.02);
+                            the zone gaps scale with it (1.5x and 3x). "auto" sets it per symbol to
+                            0.4 of its typical one-minute range, so a $240 stock is judged by its own
+                            noise rather than RIVN's. Applies to replay, grid and live.
               --verbose     replay: print every minute with its up/down/none zone, any signal,
                             the price and the three averages, plus a summary line
               --verify      replay: run on Massive's filled 04:00-20:00 series instead and compare
@@ -108,6 +113,7 @@ public final class Main {
 
         Session session = Session.EXTENDED;
         SignalWindow window = SignalWindow.DEFAULT;
+        Band band = Band.DEFAULT;
         List<String> rest = new ArrayList<>();
         for (int i = 2; i < args.length; i++) {
             try {
@@ -115,6 +121,8 @@ public final class Main {
                     session = Session.parse(requireValue(args, ++i));
                 } else if (args[i].equals("--window")) {
                     window = SignalWindow.parse(requireValue(args, ++i));
+                } else if (args[i].equals("--band")) {
+                    band = Band.parse(requireValue(args, ++i));
                 } else {
                     rest.add(args[i]);
                 }
@@ -129,10 +137,10 @@ public final class Main {
             System.exit(at(symbols, session, args));
         }
         if (args[0].equals("grid")) {
-            System.exit(grid(symbols, session, window, args));
+            System.exit(grid(symbols, session, window, band, args));
         }
         if (args[0].equals("live")) {
-            System.exit(live(symbols, session, window, args));
+            System.exit(live(symbols, session, window, band, args));
         }
         LocalDate date = null;
         int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
@@ -180,7 +188,7 @@ public final class Main {
             LocalDate day = date != null ? date
                     : TradingCalendar.previousTradingDay(client, symbol, LocalDate.now(PriceEvent.EASTERN));
             Path csvFor = csvFor(csv, symbol, symbols.size() > 1);
-            Replay.Result result = replay.run(new Replay.Options(symbol, day, session, window, cooldown, verbose, verify, csvFor));
+            Replay.Result result = replay.run(new Replay.Options(symbol, day, session, window, cooldown, verbose, verify, csvFor, band));
             allPass &= result.allOraclesPass();
         }
         System.exit(allPass ? 0 : 1);
@@ -224,7 +232,7 @@ public final class Main {
         return failures == 0 ? 0 : 1;
     }
 
-    private static int grid(List<String> symbols, Session session, SignalWindow window, String[] args) throws Exception {
+    private static int grid(List<String> symbols, Session session, SignalWindow window, Band band, String[] args) throws Exception {
         if (symbols.size() != 1 || args.length < 3) {
             System.err.println("grid needs one ticker and a month, e.g. grid RIVN 2026-10");
             return 2;
@@ -279,7 +287,7 @@ public final class Main {
         }
         try {
             new MonthGrid(clientOrExit(), System.out).runAny(
-                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, window, cooldown, shares, risk, cap, stops, targets, show));
+                    new MonthGrid.Options(symbols.get(0), month, toMonth, session, window, cooldown, shares, risk, cap, stops, targets, show, band));
             return 0;
         } catch (IllegalArgumentException e) {
             System.err.println("error: " + e.getMessage());
@@ -290,7 +298,7 @@ public final class Main {
         }
     }
 
-    private static int live(List<String> symbols, Session session, SignalWindow window, String[] args) throws Exception {
+    private static int live(List<String> symbols, Session session, SignalWindow window, Band band, String[] args) throws Exception {
         if (symbols.isEmpty()) {
             System.err.println("live needs at least one ticker, e.g. live STLD,DIS --bracket STLD=0.18/1.10 --bracket DIS=0.16/0.24");
             return 2;
@@ -339,7 +347,7 @@ public final class Main {
             int fallback = shares > 0 ? shares : com.hamilla.sma.SymbolSettings.DEFAULT_SHARES;
             Sizing sizing = (risk > 0 ? Sizing.risk(risk, fallback) : Sizing.shares(fallback)).cappedAt(cap);
             new Live(clientOrExit(), System.out).run(
-                    new Live.Options(ordered, sizing, book, session, window, cooldown, date, poll));
+                    new Live.Options(ordered, sizing, book, session, window, cooldown, date, poll, band));
             return 0;
         } catch (IllegalArgumentException | java.time.format.DateTimeParseException e) {
             System.err.println("error: " + e.getMessage());

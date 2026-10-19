@@ -1,14 +1,17 @@
 package com.hamilla.live;
 
+import com.hamilla.backtest.Grid;
 import com.hamilla.backtest.Sizing;
 import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
 import com.hamilla.replay.TradingCalendar;
 import com.hamilla.sma.Action;
+import com.hamilla.sma.Band;
 import com.hamilla.sma.Session;
 import com.hamilla.sma.SignalPrices;
 import com.hamilla.sma.SignalWindow;
+import com.hamilla.sma.Thresholds;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -19,9 +22,11 @@ import java.time.LocalTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Runs a {@link PaperBook} through the trading day. At start it loads a week of bars for every symbol to
@@ -46,9 +51,15 @@ public final class Live {
      * @param bookDollars most dollars in open positions at once; 0 for no limit
      * @param date        the day to run; null means today (Eastern)
      * @param pollSeconds seconds between polls of the day's bars
+     * @param band        the entry band and zone gaps: fixed dollars, or auto to scale to each symbol's typical minute range
      */
     public record Options(Map<String, Bracket> brackets, Sizing sizing, double bookDollars, Session session, SignalWindow window,
-                          int cooldownMinutes, LocalDate date, int pollSeconds) {
+                          int cooldownMinutes, LocalDate date, int pollSeconds, Band band) {
+        public Options(Map<String, Bracket> brackets, Sizing sizing, double bookDollars, Session session, SignalWindow window,
+                       int cooldownMinutes, LocalDate date, int pollSeconds) {
+            this(brackets, sizing, bookDollars, session, window, cooldownMinutes, date, pollSeconds, Band.DEFAULT);
+        }
+
         public Options {
             if (pollSeconds < 1) {
                 throw new IllegalArgumentException("poll must be at least 1 second, got " + pollSeconds);
@@ -82,22 +93,39 @@ public final class Live {
                 day = last;
             }
         }
-        PaperBook book = new PaperBook(opts.brackets(), opts.sizing(), opts.bookDollars(), opts.session(), opts.window(),
-                opts.cooldownMinutes(), day, new Printer());
         final LocalDate tradingDay = day;
         closeMs = tradingDay.atTime(MARKET_CLOSE).atZone(PriceEvent.EASTERN).toInstant().toEpochMilli();
         boolean liveDay = clock.millis() < closeMs;
 
-        out.printf("%s %s: %s, window %s, %s, book %s%n", liveDay ? "live" : "rehearsal", day,
+        out.printf("%s %s: %s, window %s, %s, book %s, band %s%n", liveDay ? "live" : "rehearsal", day,
                 String.join(" ", opts.brackets().keySet()), opts.window(), sizingText(opts.sizing()),
-                opts.bookDollars() > 0 ? String.format("$%,.0f", opts.bookDollars()) : "unlimited");
-        for (var e : opts.brackets().entrySet()) {
-            out.printf("  %-5s stop %.2f target %.2f%n", e.getKey(), e.getValue().stop(), e.getValue().target());
-        }
+                opts.bookDollars() > 0 ? String.format("$%,.0f", opts.bookDollars()) : "unlimited", opts.band());
 
-        // Warm up and catch up: everything completed so far.
+        // Load the warm-up week for every symbol: it fills the averages and sets the symbol's thresholds.
+        Map<String, List<MinuteBar>> history = new LinkedHashMap<>();
+        Map<String, Thresholds> thresholds = new LinkedHashMap<>();
         for (String symbol : opts.brackets().keySet()) {
             List<MinuteBar> bars = client.minuteBars(symbol, day.minusDays(WARMUP_CALENDAR_DAYS), day);
+            history.put(symbol, bars);
+            Set<LocalDate> priorDays = new HashSet<>();
+            for (MinuteBar b : bars) {
+                LocalDate d = Instant.ofEpochMilli(b.startMs()).atZone(PriceEvent.EASTERN).toLocalDate();
+                if (d.isBefore(tradingDay)) {
+                    priorDays.add(d);
+                }
+            }
+            double range = Grid.typicalMinuteRange(bars, priorDays);
+            Thresholds t = opts.band().thresholdsFor(range);
+            thresholds.put(symbol, t);
+            Bracket b = opts.brackets().get(symbol);
+            out.printf("  %-5s stop %.2f target %.2f  %s  (minute range %.3f)%n", symbol, b.stop(), b.target(), t, range);
+        }
+        PaperBook book = new PaperBook(opts.brackets(), thresholds, opts.sizing(), opts.bookDollars(), opts.session(), opts.window(),
+                opts.cooldownMinutes(), day, new Printer());
+
+        // Catch up: everything completed so far.
+        for (String symbol : opts.brackets().keySet()) {
+            List<MinuteBar> bars = history.get(symbol);
             book.onBars(symbol, completed(bars, clock.millis()));
             long onDay = bars.stream().filter(b -> sameDay(b.startMs(), tradingDay)).count();
             if (onDay == 0 && !liveDay) {

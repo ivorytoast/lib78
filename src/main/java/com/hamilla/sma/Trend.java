@@ -20,7 +20,12 @@ public enum Trend {
     /** Slack for floating-point averages, so a gap of exactly the minimum still counts. */
     private static final double EPSILON = 1e-9;
 
+    /** The zone under the default (RIVN) thresholds. */
     public static Trend of(SmaSnapshot s) {
+        return of(s, Thresholds.DEFAULT);
+    }
+
+    public static Trend of(SmaSnapshot s, Thresholds t) {
         double p = s.price();
         double a20 = s.sma20();
         double a50 = s.sma50();
@@ -28,7 +33,7 @@ public enum Trend {
         if (Double.isNaN(a20) || Double.isNaN(a50) || Double.isNaN(a200)) {
             return NONE;
         }
-        if (Math.abs(a20 - a50) < MIN_20_50_GAP - EPSILON || Math.abs(a20 - a200) < MIN_20_200_GAP - EPSILON) {
+        if (Math.abs(a20 - a50) < t.gap2050() - EPSILON || Math.abs(a20 - a200) < t.gap20200() - EPSILON) {
             return NONE;
         }
         if (a200 < a50 && a50 < a20 && p > a20) {

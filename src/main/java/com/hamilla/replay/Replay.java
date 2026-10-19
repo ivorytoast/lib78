@@ -3,13 +3,16 @@ package com.hamilla.replay;
 import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
+import com.hamilla.backtest.Grid;
 import com.hamilla.sma.Action;
+import com.hamilla.sma.Band;
 import com.hamilla.sma.MinuteBarTracker;
 import com.hamilla.sma.MovingAverages;
 import com.hamilla.sma.Session;
 import com.hamilla.sma.SignalPrices;
 import com.hamilla.sma.SignalWindow;
 import com.hamilla.sma.SmaSnapshot;
+import com.hamilla.sma.Thresholds;
 import com.hamilla.sma.Trend;
 
 import java.io.IOException;
@@ -68,9 +71,15 @@ public final class Replay {
      * @param verbose         print every minute with its zone, signal, price and averages
      * @param verify          run on Massive's filled series and compare every bar with its minute SMA endpoint
      * @param csvOut          optional path to write one row per close-updating trade
+     * @param band            the entry band and zone gaps: fixed dollars, or auto to scale to the symbol's typical minute range
      */
     public record Options(String symbol, LocalDate date, Session session, SignalWindow window, int cooldownMinutes,
-                          boolean verbose, boolean verify, Path csvOut) {
+                          boolean verbose, boolean verify, Path csvOut, Band band) {
+        public Options(String symbol, LocalDate date, Session session, SignalWindow window, int cooldownMinutes,
+                       boolean verbose, boolean verify, Path csvOut) {
+            this(symbol, date, session, window, cooldownMinutes, verbose, verify, csvOut, Band.DEFAULT);
+        }
+
         public Options {
             if (cooldownMinutes < 0) {
                 throw new IllegalArgumentException("cooldown must be 0 or more minutes, got " + cooldownMinutes);
@@ -187,9 +196,19 @@ public final class Replay {
             }
         }
 
+        Set<LocalDate> warmupDays = new HashSet<>();
+        for (MinuteBar b : history) {
+            warmupDays.add(Instant.ofEpochMilli(b.startMs()).atZone(PriceEvent.EASTERN).toLocalDate());
+        }
+        double range = Grid.typicalMinuteRange(history, warmupDays);
+        Thresholds thresholds = opts.band().thresholdsFor(range);
+        if (!thresholds.isDefault()) {
+            out.printf("%s %s: %s (typical minute range %.3f over the prior week)%n", symbol, date, thresholds, range);
+        }
+
         // The engine starts with every warm-up close but the last; the tracker rolls that one in as the seed bar.
         MovingAverages engine = new MovingAverages(symbol, closes.isEmpty() ? closes : closes.subList(0, closes.size() - 1));
-        Collector collector = new Collector(opts, engine, massive);
+        Collector collector = new Collector(opts, engine, massive, thresholds);
         if (!closes.isEmpty()) {
             long lastInSession = history.get(history.size() - 1).startMs();
             for (int i = history.size() - 1; i >= 0; i--) {
@@ -271,6 +290,7 @@ public final class Replay {
         private final Options opts;
         private final List<TreeMap<Long, Double>> massive;
         private final PrintWriter csv;
+        private final Thresholds thresholds;
         final MinuteBarTracker tracker;
         final Set<Long> engineBars = new HashSet<>();
         final List<Signal> signals = new ArrayList<>();
@@ -283,9 +303,10 @@ public final class Replay {
         long applied;
         private long lastPrintedMs = Long.MIN_VALUE;
 
-        Collector(Options opts, MovingAverages engine, List<TreeMap<Long, Double>> massive) throws IOException {
+        Collector(Options opts, MovingAverages engine, List<TreeMap<Long, Double>> massive, Thresholds thresholds) throws IOException {
             this.opts = opts;
             this.massive = massive;
+            this.thresholds = thresholds;
             this.tracker = new MinuteBarTracker(engine, opts.effectiveSession(), opts.verify(), this);
             for (int i = 0; i < MovingAverages.WINDOWS.length; i++) {
                 examples.add(new ArrayList<>());
@@ -309,16 +330,16 @@ public final class Replay {
                 SmaSnapshot snap = maybe.get();
                 ZonedDateTime et = event.easternTime();
                 csv.printf(Locale.US, "%s,%d,%s,%s,%s,%s,%s,%s,%s%n", et.format(TIME), event.sipTimestampNanos(),
-                        event.price(), event.size(), snap.sma20(), snap.sma50(), snap.sma200(), Trend.of(snap).label(),
-                        Action.of(snap).map(Action::label).orElse(""));
+                        event.price(), event.size(), snap.sma20(), snap.sma50(), snap.sma200(), Trend.of(snap, thresholds).label(),
+                        Action.of(snap, thresholds).map(Action::label).orElse(""));
             }
         }
 
         @Override
         public void barClosed(long barStartMs, double close, SmaSnapshot atClose, boolean empty) {
             if (printed(opts, barStartMs)) {
-                Trend trend = Trend.of(atClose);
-                Optional<Action> action = Action.of(atClose);
+                Trend trend = Trend.of(atClose, thresholds);
+                Optional<Action> action = Action.of(atClose, thresholds);
                 boolean print = action.isPresent()
                         && (lastPrintedMs == Long.MIN_VALUE
                             || barStartMs - lastPrintedMs >= opts.cooldownMinutes() * Session.MINUTE_MS);

@@ -9,6 +9,7 @@ import com.hamilla.sma.MovingAverages;
 import com.hamilla.sma.Session;
 import com.hamilla.sma.SignalWindow;
 import com.hamilla.sma.SmaSnapshot;
+import com.hamilla.sma.Thresholds;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -28,15 +29,21 @@ public final class SignalGenerator {
     private final Session session;
     private final SignalWindow window;
     private final int cooldownMinutes;
+    private final Thresholds thresholds;
 
     public SignalGenerator(Session session, int cooldownMinutes) {
         this(session, SignalWindow.DEFAULT, cooldownMinutes);
     }
 
     public SignalGenerator(Session session, SignalWindow window, int cooldownMinutes) {
+        this(session, window, cooldownMinutes, Thresholds.DEFAULT);
+    }
+
+    public SignalGenerator(Session session, SignalWindow window, int cooldownMinutes, Thresholds thresholds) {
         this.session = session;
         this.window = window;
         this.cooldownMinutes = cooldownMinutes;
+        this.thresholds = thresholds;
     }
 
     /**
@@ -60,7 +67,7 @@ public final class SignalGenerator {
             if (!window.contains(barStartMs) || !dates.contains(day)) {
                 return;
             }
-            Optional<Action> action = Action.of(atClose);
+            Optional<Action> action = Action.of(atClose, thresholds);
             if (action.isPresent() && cooldown.take(barStartMs)) {
                 signals.add(new TradeSignal(barStartMs, action.get(), atClose.price()));
             }

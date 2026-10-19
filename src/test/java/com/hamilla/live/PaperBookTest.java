@@ -260,4 +260,20 @@ class PaperBookTest {
         assertEquals(java.util.Optional.empty(), Live.forming(List.of(done, forming), 1_060_000L));
         assertEquals(java.util.Optional.empty(), Live.forming(List.of(done), 1_030_000L));
     }
+
+    @Test
+    void perSymbolThresholdsChangeWhichClosesSignal() {
+        List<MinuteBar> bars = rivn();
+        // RIVN at a band four times wider than its own (and gaps to match) trades a different set of minutes.
+        PaperBook wide = new PaperBook(Map.of("RIVN", RIVN), Map.of("RIVN", com.hamilla.sma.Thresholds.scaledTo(0.08)),
+                Sizing.shares(2000), 0, Session.EXTENDED, WINDOW, 6, OCT16, null);
+        wide.onBars("RIVN", bars);
+        PaperBook plain = new PaperBook(Map.of("RIVN", RIVN), Sizing.shares(2000), 0, Session.EXTENDED, WINDOW, 6, OCT16, null);
+        plain.onBars("RIVN", bars);
+        assertTrue(!wide.trades().equals(plain.trades()));
+        PaperBook same = new PaperBook(Map.of("RIVN", RIVN), Map.of("RIVN", com.hamilla.sma.Thresholds.fromRange(0.05)),
+                Sizing.shares(2000), 0, Session.EXTENDED, WINDOW, 6, OCT16, null);
+        same.onBars("RIVN", bars);
+        assertEquals(plain.trades(), same.trades());
+    }
 }

@@ -27,12 +27,17 @@ public enum Action {
         return label;
     }
 
+    /** The signal under the default (RIVN) thresholds. */
     public static Optional<Action> of(SmaSnapshot s) {
-        Trend trend = Trend.of(s);
-        if (trend == Trend.UP && s.price() - s.sma20() <= BAND + EPSILON) {
+        return of(s, Thresholds.DEFAULT);
+    }
+
+    public static Optional<Action> of(SmaSnapshot s, Thresholds t) {
+        Trend trend = Trend.of(s, t);
+        if (trend == Trend.UP && s.price() - s.sma20() <= t.band() + EPSILON) {
             return Optional.of(BUY_LONG);
         }
-        if (trend == Trend.DOWN && s.sma20() - s.price() <= BAND + EPSILON) {
+        if (trend == Trend.DOWN && s.sma20() - s.price() <= t.band() + EPSILON) {
             return Optional.of(SHORT_SELL);
         }
         return Optional.empty();

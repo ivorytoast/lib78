@@ -4,7 +4,9 @@ import com.hamilla.market.DailyBar;
 import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
+import com.hamilla.sma.Band;
 import com.hamilla.sma.Session;
+import com.hamilla.sma.Thresholds;
 import com.hamilla.sma.SignalWindow;
 import com.hamilla.sma.SymbolSettings;
 
@@ -39,9 +41,16 @@ public final class MonthGrid {
      * @param cap       most dollars in one position; when positive, shares are also limited to cap divided by the entry price
      * @param stops     explicit stop levels, or null for defaults built from the typical minute range
      * @param targets   explicit target levels, or null for defaults
+     * @param band      the entry band and zone gaps: fixed dollars, or auto to scale to the symbol's typical minute range
      */
     public record Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
-                          int cooldown, int shares, double risk, double cap, List<Double> stops, List<Double> targets, List<double[]> show) {
+                          int cooldown, int shares, double risk, double cap, List<Double> stops, List<Double> targets,
+                          List<double[]> show, Band band) {
+        public Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
+                       int cooldown, int shares, double risk, double cap, List<Double> stops, List<Double> targets, List<double[]> show) {
+            this(symbol, month, toMonth, session, window, cooldown, shares, risk, cap, stops, targets, show, Band.DEFAULT);
+        }
+
         public Options(String symbol, YearMonth month, YearMonth toMonth, Session session, SignalWindow window,
                        int cooldown, int shares, double risk, List<Double> stops, List<Double> targets, List<double[]> show) {
             this(symbol, month, toMonth, session, window, cooldown, shares, risk, 0, stops, targets, show);
@@ -167,15 +176,18 @@ public final class MonthGrid {
         }
 
         List<MinuteBar> bars = client.minuteBars(opts.symbol(), first.minusDays(WARMUP_CALENDAR_DAYS), last);
-        List<TradeSignal> signals = new SignalGenerator(opts.session(), opts.window(), opts.cooldown()).generate(opts.symbol(), bars, days);
+        double range = Grid.typicalMinuteRange(bars, days);
+        Thresholds thresholds = opts.band().thresholdsFor(range);
+        List<TradeSignal> signals = new SignalGenerator(opts.session(), opts.window(), opts.cooldown(), thresholds)
+                .generate(opts.symbol(), bars, days);
         TreeSet<LocalDate> sorted = (TreeSet<LocalDate>) days;
-        out.printf("%s %s%s: %d trading days (%s to %s), %d signals in window %s%n", opts.symbol(), opts.month(),
-                opts.isRange() ? " to " + opts.lastMonth() : "", days.size(), sorted.first(), sorted.last(), signals.size(), opts.window());
+        out.printf("%s %s%s: %d trading days (%s to %s), %d signals in window %s%s%n", opts.symbol(), opts.month(),
+                opts.isRange() ? " to " + opts.lastMonth() : "", days.size(), sorted.first(), sorted.last(), signals.size(), opts.window(),
+                thresholds.isDefault() ? "" : ", " + thresholds);
         if (signals.isEmpty()) {
             throw new IOException("no signals in the period");
         }
 
-        double range = Grid.typicalMinuteRange(bars, days);
         List<Double> stops = opts.stops() != null ? opts.stops() : Grid.defaultLevels(Grid.STOP_MULTIPLES, range);
         List<Double> targets = opts.targets() != null ? opts.targets() : Grid.defaultLevels(Grid.TARGET_MULTIPLES, range);
         int shares = opts.shares() > 0 ? opts.shares() : SymbolSettings.shares(opts.symbol());

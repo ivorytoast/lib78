@@ -10,6 +10,7 @@ import com.hamilla.sma.MovingAverages;
 import com.hamilla.sma.Session;
 import com.hamilla.sma.SignalWindow;
 import com.hamilla.sma.SmaSnapshot;
+import com.hamilla.sma.Thresholds;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -75,6 +76,7 @@ public final class PaperBook {
     }
 
     private final Map<String, Bracket> brackets;
+    private final Map<String, Thresholds> thresholds;
     private final Sizing sizing;
     private final double bookDollars;
     private final Session session;
@@ -98,6 +100,12 @@ public final class PaperBook {
      */
     public PaperBook(Map<String, Bracket> brackets, Sizing sizing, double bookDollars, Session session, SignalWindow window,
                      int cooldownMinutes, LocalDate tradingDay, Listener listener) {
+        this(brackets, Map.of(), sizing, bookDollars, session, window, cooldownMinutes, tradingDay, listener);
+    }
+
+    /** @param thresholds per-symbol entry band and zone gaps; a symbol not listed uses {@link Thresholds#DEFAULT} */
+    public PaperBook(Map<String, Bracket> brackets, Map<String, Thresholds> thresholds, Sizing sizing, double bookDollars,
+                     Session session, SignalWindow window, int cooldownMinutes, LocalDate tradingDay, Listener listener) {
         if (brackets.isEmpty()) {
             throw new IllegalArgumentException("at least one symbol with a bracket is needed");
         }
@@ -105,6 +113,7 @@ public final class PaperBook {
             throw new IllegalArgumentException("book must not be negative, got " + bookDollars);
         }
         this.brackets = Map.copyOf(brackets);
+        this.thresholds = Map.copyOf(thresholds);
         this.sizing = sizing;
         this.bookDollars = bookDollars;
         this.session = session;
@@ -182,7 +191,7 @@ public final class PaperBook {
             return;
         }
         fill(symbol, bar, et.toLocalTime());
-        Optional<Action> action = Action.of(atClose);
+        Optional<Action> action = Action.of(atClose, thresholds.getOrDefault(symbol, Thresholds.DEFAULT));
         listener.bar(symbol, bar, atClose, action);
         if (action.isEmpty() || !window.contains(bar.startMs()) || !et.toLocalTime().isBefore(BracketSimulator.LAST_ENTRY)) {
             return;

@@ -152,6 +152,15 @@ Options:
   nothing from 12:30 on. Positions still close at 15:55 in the grid.
 - `--cooldown <minutes>` sets the quiet period after a printed signal
   (default 6).
+- `--band <dollars|auto>` sets how close to the 20 a close must be for a
+  signal (default 0.02); the zone gaps scale with it, 1.5 and 3 times the
+  band. These cents were tuned on RIVN, which moves about five cents a
+  minute. `--band auto` sets the band per symbol to 0.4 of its typical
+  one-minute range over the prior week (STLD at a 16-cent range gets a
+  6.4-cent band and 9.6/19-cent gaps; RIVN stays at 2, 3 and 6 cents), so each
+  symbol is judged by its own noise. The same option applies to `grid` and
+  `live`, and the grid header shows the thresholds it used. Re-run the grids
+  before trading on a different band: the trades change.
 - `--verbose` prints every minute with its zone, any signal (marked
   `(cooldown)` when held back), the price and the three averages, followed by
   a summary line.
