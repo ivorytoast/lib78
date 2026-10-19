@@ -1,6 +1,9 @@
 package com.hamilla;
 
 import com.hamilla.backtest.MonthGrid;
+import com.hamilla.backtest.Sizing;
+import com.hamilla.live.Bracket;
+import com.hamilla.live.Live;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
 import com.hamilla.query.PointInTime;
@@ -15,7 +18,9 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public final class Main {
 
@@ -23,6 +28,7 @@ public final class Main {
             usage: lib78 replay <TICKER[,TICKER...]> [YYYY-MM-DD] [options]
                    lib78 at     <TICKER[,TICKER...]> <MM/DD/YYYY-HH:MM>
                    lib78 grid   <TICKER> <YYYY-MM> [<YYYY-MM>] [options]
+                   lib78 live   <TICKER[,TICKER...]> --bracket <TICKER=stop/target>... [options]
 
             replay  Replays one past trading day trade by trade on one-minute bars. Directly after
                     each minute closes, inside --window (10:30 to 14:30 by default), prints the minute when
@@ -44,6 +50,11 @@ public final class Main {
                     pair chosen from the most consistent region of the table. With a second month,
                     runs every month in the range on the same levels and prints the total, the worst
                     month and the number of positive months per pair, recommending by steadiness.
+            live    Trades the book on paper through today. Warms the averages up on the past week, catches
+                    up on the day so far, then after each minute closes prints any entry signal with its
+                    share count, stop and target, skips a signal that would put more than --book dollars in
+                    open positions, and prints each stop, target or 15:55 close as it happens, with the
+                    day's running P&L. With --date it runs a past day the same way, all at once.
 
             options:
               --session <HH:MM-HH:MM>  daily window of bars the averages run on, Eastern time
@@ -68,6 +79,12 @@ public final class Main {
                             (defaults for both are multiples of the typical one-minute range)
               --show <stop,target>  grid over a range: print that pair's month-by-month P&L and
                             time-of-day breakdown; may be repeated
+              --bracket <TICKER=stop/target>  live: that symbol's stop and target in dollars; one per
+                            ticker, may be repeated or comma-separated (every ticker needs one)
+              --book <dollars>  live: most dollars in open positions at once (default 0: no limit)
+              --date <YYYY-MM-DD>  live: run that past day at once instead of today
+              --poll <seconds>  live: seconds between polls while a bar is still missing (default 5)
+              (--shares, --risk, --cap, --cooldown and --window apply to live as to grid)
 
             environment:
               MASSIVE_API_KEY          required
@@ -75,7 +92,8 @@ public final class Main {
             """;
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 2 || !(args[0].equals("replay") || args[0].equals("at") || args[0].equals("grid"))) {
+        if (args.length < 2 || !(args[0].equals("replay") || args[0].equals("at") || args[0].equals("grid")
+                || args[0].equals("live"))) {
             System.err.print(USAGE);
             System.exit(2);
         }
@@ -111,6 +129,9 @@ public final class Main {
         }
         if (args[0].equals("grid")) {
             System.exit(grid(symbols, session, window, args));
+        }
+        if (args[0].equals("live")) {
+            System.exit(live(symbols, session, window, args));
         }
         LocalDate date = null;
         int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
@@ -260,6 +281,66 @@ public final class Main {
                     new MonthGrid.Options(symbols.get(0), month, toMonth, session, window, cooldown, shares, risk, cap, stops, targets, show));
             return 0;
         } catch (IllegalArgumentException e) {
+            System.err.println("error: " + e.getMessage());
+            return 2;
+        } catch (IOException e) {
+            System.err.println("error: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    private static int live(List<String> symbols, Session session, SignalWindow window, String[] args) throws Exception {
+        if (symbols.isEmpty()) {
+            System.err.println("live needs at least one ticker, e.g. live STLD,DIS --bracket STLD=0.18/1.10 --bracket DIS=0.16/0.24");
+            return 2;
+        }
+        int cooldown = Replay.DEFAULT_COOLDOWN_MINUTES;
+        int shares = 0;
+        double risk = 0;
+        double cap = 0;
+        double book = 0;
+        int poll = 5;
+        LocalDate date = null;
+        Map<String, Bracket> brackets = new LinkedHashMap<>();
+        try {
+            for (int i = 2; i < args.length; i++) {
+                switch (args[i]) {
+                    case "--cooldown" -> cooldown = Integer.parseInt(requireValue(args, ++i));
+                    case "--shares" -> shares = Integer.parseInt(requireValue(args, ++i));
+                    case "--risk" -> risk = Double.parseDouble(requireValue(args, ++i));
+                    case "--cap" -> cap = Double.parseDouble(requireValue(args, ++i));
+                    case "--book" -> book = Double.parseDouble(requireValue(args, ++i));
+                    case "--poll" -> poll = Integer.parseInt(requireValue(args, ++i));
+                    case "--date" -> date = LocalDate.parse(requireValue(args, ++i));
+                    case "--bracket", "--brackets" -> brackets.putAll(Bracket.parseAll(requireValue(args, ++i)));
+                    default -> {
+                        System.err.println("unknown option " + args[i]);
+                        return 2;
+                    }
+                }
+            }
+            if (cooldown < 0 || shares < 0 || risk < 0 || cap < 0 || book < 0) {
+                throw new IllegalArgumentException("cooldown, shares, risk, cap and book must not be negative");
+            }
+            Map<String, Bracket> ordered = new LinkedHashMap<>();
+            for (String symbol : symbols) {
+                Bracket b = brackets.get(symbol);
+                if (b == null) {
+                    throw new IllegalArgumentException("no --bracket for " + symbol + ", e.g. --bracket " + symbol + "=0.18/1.10");
+                }
+                ordered.put(symbol, b);
+            }
+            for (String symbol : brackets.keySet()) {
+                if (!ordered.containsKey(symbol)) {
+                    throw new IllegalArgumentException("--bracket " + symbol + " is not one of the tickers");
+                }
+            }
+            int fallback = shares > 0 ? shares : com.hamilla.sma.SymbolSettings.DEFAULT_SHARES;
+            Sizing sizing = (risk > 0 ? Sizing.risk(risk, fallback) : Sizing.shares(fallback)).cappedAt(cap);
+            new Live(clientOrExit(), System.out).run(
+                    new Live.Options(ordered, sizing, book, session, window, cooldown, date, poll));
+            return 0;
+        } catch (IllegalArgumentException | java.time.format.DateTimeParseException e) {
             System.err.println("error: " + e.getMessage());
             return 2;
         } catch (IOException e) {

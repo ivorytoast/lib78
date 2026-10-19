@@ -205,6 +205,55 @@ Options: `--shares N` (default: the symbol's configured size in
 the month's typical one-minute range), plus `--cooldown`, `--session` and
 `--window` as for the replay.
 
+## Trade the book live
+
+```
+export MASSIVE_API_KEY=...
+java -jar target/lib78.jar live STLD,DIS,DRI,CB,BTU --window 10:30-12:30 --risk 500 --cap 100000 --book 400000 \
+    --bracket STLD=0.18/1.10 --bracket DIS=0.16/0.24 --bracket DRI=0.57/0.57 --bracket CB=0.81/1.20 --bracket BTU=0.09/0.14
+```
+
+`live` sends no orders. It prints what to do, so a person can do it. Start it
+any time before the window opens (or during the day: it catches up on the
+minutes already gone). It loads the past week of bars for every ticker to fill
+the 200 bar window, then a couple of seconds after each minute closes it fetches
+the day's bars and rolls the new minute through the same engine the replay and
+grid use. Each ticker's stop and target come from its grid via `--bracket`,
+sizing follows `--shares`, `--risk` and `--cap` exactly as in the grid, and
+`--book` is the most dollars that may be in open positions at once.
+
+```
+live 2026-10-20: STLD DIS DRI CB BTU, window 10:30-12:30, $500 risked per trade, at most $100,000 per position, book $400,000
+  STLD  stop 0.18 target 1.10
+  ...
+caught up to 09:41, watching...
+10:31  SELL SHORT   904 DIS   @ 110.59    stop 110.75   target 110.35    ($99,973; book $99,973)
+10:38  BUY TO COVER 904 DIS   @ 110.35    target hit  +$217  (day +$217)
+10:52  BUY          415 STLD  @ 240.54    stop 240.36   target 241.64    ($99,824; book $99,824)
+11:02  BUY         4186 BTU   @ 23.89     stop 23.80    target 24.03     ($100,004; book $199,828)
+11:03  no SHORT     277 CB    @ 359.79    SKIP: book full ($399,900 open)
+11:19  SELL         415 STLD  @ 240.36    stop hit    -$75  (day +$142)
+...
+15:55  SELL        4186 BTU   @ 23.95     day close   +$251  (day +$1,120)
+window closed and nothing open: 9 trades, 4 targets, 4 stops, 1 closed at 15:55, 2 skipped (book full), P&L +$1,120
+```
+
+Lines are stamped with the bar's minute, as the replay prints it, and appear
+as that minute closes. A signal line is the order to place then: the side, the
+share count (the smaller of `--risk` divided by the stop and `--cap` divided
+by the price), the price, and where the stop and target sit. A `SKIP` line is a
+signal the book had no room for; it still starts the ticker's cooldown, as it
+does in the backtest. Exit lines print when a later minute's low or high
+reaches the stop or target (a minute touching both is a stop), or at 15:55 for
+whatever is still open, with the trade's and the day's P&L. The run ends when
+the window has closed and nothing is open, or at 16:00.
+
+`--date YYYY-MM-DD` runs a past day through the same code all at once, which is
+the way to rehearse: the trades it prints are the grid's trades for that day.
+`--poll` sets how many seconds to wait between fetches while a minute's bar
+has not appeared yet (default 5); a minute with no trade in a ticker is left
+alone after 30 seconds and the next bar carries on.
+
 ## Tests
 
 ```
