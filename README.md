@@ -216,9 +216,10 @@ java -jar target/lib78.jar live STLD,DIS,DRI,CB,BTU --window 10:30-12:30 --risk 
 `live` sends no orders. It prints what to do, so a person can do it. Start it
 any time before the window opens (or during the day: it catches up on the
 minutes already gone). It loads the past week of bars for every ticker to fill
-the 200 bar window, then a couple of seconds after each minute closes it fetches
-the day's bars and rolls the new minute through the same engine the replay and
-grid use. Each ticker's stop and target come from its grid via `--bracket`,
+the 200 bar window, then every 5 seconds (`--poll` changes it) it fetches the
+day's bars, rolls any newly completed minute through the same engine the
+replay and grid use, and checks the minute still forming against the open
+positions. Each ticker's stop and target come from its grid via `--bracket`,
 sizing follows `--shares`, `--risk` and `--cap` exactly as in the grid, and
 `--book` is the most dollars that may be in open positions at once.
 
@@ -243,18 +244,19 @@ as that minute closes. A signal line is the order to place then: the side, the
 share count (the smaller of `--risk` divided by the stop and `--cap` divided
 by the price), the price, and where the stop and target sit. A `SKIP` line is a
 signal the book had no room for; it still starts the ticker's cooldown, as it
-does in the backtest. Exit lines print when a later minute's low or high
-reaches the stop or target (a minute touching both is a stop), or at 15:55 for
-whatever is still open, with the trade's and the day's P&L. The run ends when
+does in the backtest. Exit lines print within seconds of a later minute's low or high
+reaching the stop or target, or at 15:55 for whatever is still open, with the
+trade's and the day's P&L. (In a rehearsal only completed bars exist, so a
+minute that touches both is a stop, as in the grid; live, whichever the price
+reaches first prints first.) The run ends when
 the window has closed and nothing is open, or at 16:00.
 
 `--date YYYY-MM-DD` runs a past day through the same code all at once, which is
 the way to rehearse: the trades it prints are the grid's trades for that day.
 Run after the close, or on a weekend, with no `--date`, it rehearses the most
 recent trading day.
-`--poll` sets how many seconds to wait between fetches while a minute's bar
-has not appeared yet (default 5); a minute with no trade in a ticker is left
-alone after 30 seconds and the next bar carries on.
+One poll always lands two seconds after each minute closes, so entries print
+promptly whatever `--poll` is set to.
 
 ## Tests
 

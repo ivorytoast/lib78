@@ -194,4 +194,70 @@ class PaperBookTest {
         assertEquals(List.of(done), Live.completed(List.of(done, forming), 1_000_000L + 30_000L));
         assertEquals(List.of(done, forming), Live.completed(List.of(done, forming), 1_060_000L));
     }
+
+    @Test
+    void aFormingBarFillsAStopOrTargetBeforeTheMinuteCloses() {
+        List<MinuteBar> bars = rivn();
+        PaperBook book = new PaperBook(Map.of("RIVN", RIVN), Sizing.shares(2000), 0, Session.EXTENDED, WINDOW, 6, OCT16, null);
+        // Feed through the first signal bar (10:31 short at 12.93, target 12.68).
+        for (MinuteBar b : bars) {
+            if (b.startMs() > com.hamilla.backtest.BarsAccess.at("10:31")) {
+                break;
+            }
+            book.onBar("RIVN", b);
+        }
+        assertEquals(1, book.openPositions().size());
+        PaperBook.Position p = book.openPositions().get(0);
+
+        // A forming 10:32 minute that has not reached either level yet changes nothing.
+        long t1032 = com.hamilla.backtest.BarsAccess.at("10:32");
+        book.onFormingBar("RIVN", new MinuteBar(t1032, 12.93, 12.95, 12.90, 12.91, 10));
+        assertEquals(1, book.openPositions().size());
+        assertTrue(book.trades().isEmpty());
+
+        // Later in the same minute the low touches the target: taken off now, at the target price.
+        book.onFormingBar("RIVN", new MinuteBar(t1032, 12.93, 12.95, 12.68, 12.70, 10));
+        assertTrue(book.openPositions().isEmpty());
+        assertEquals(1, book.trades().size());
+        PaperBook.Trade t = book.trades().get(0);
+        assertEquals(PaperBook.Exit.TARGET, t.exit());
+        assertEquals(p.targetPrice(), t.exitPrice(), 1e-9);
+        assertEquals(t1032, t.exitBarMs());
+        assertEquals(0.25 * 2000, t.pnl(), 1e-6);
+
+        // The completed 10:32 bar then arrives: nothing doubles up.
+        book.onBar("RIVN", new MinuteBar(t1032, 12.93, 12.95, 12.68, 12.70, 10));
+        assertEquals(1, book.trades().size());
+        assertEquals(0.25 * 2000, book.dayPnl(), 1e-6);
+    }
+
+    @Test
+    void aFormingBarNeverEntersOrClosesAtTheDayEnd() {
+        List<MinuteBar> bars = rivn();
+        PaperBook book = new PaperBook(Map.of("RIVN", RIVN), Sizing.shares(2000), 0, Session.EXTENDED, WINDOW, 6, OCT16, null);
+        for (MinuteBar b : bars) {
+            if (b.startMs() > com.hamilla.backtest.BarsAccess.at("10:30")) {
+                break;
+            }
+            book.onBar("RIVN", b);
+        }
+        // The 10:31 bar is a signal when completed; as a forming bar it is not acted on.
+        MinuteBar signalBar = bars.stream().filter(b -> b.startMs() == com.hamilla.backtest.BarsAccess.at("10:31")).findFirst().orElseThrow();
+        book.onFormingBar("RIVN", signalBar);
+        assertTrue(book.openPositions().isEmpty());
+        book.onBar("RIVN", signalBar);
+        assertEquals(1, book.openPositions().size());
+        // A forming 15:54 bar that reaches neither level leaves the position open; only the completed bar closes it.
+        book.onFormingBar("RIVN", new MinuteBar(com.hamilla.backtest.BarsAccess.at("15:54"), 12.90, 12.95, 12.85, 12.90, 10));
+        assertEquals(1, book.openPositions().size());
+    }
+
+    @Test
+    void theFormingBarIsTheOneWhoseMinuteHasNotEnded() {
+        MinuteBar done = new MinuteBar(940_000L, 1, 1, 1, 1, 1);
+        MinuteBar forming = new MinuteBar(1_000_000L, 1, 1, 1, 1, 1);
+        assertEquals(java.util.Optional.of(forming), Live.forming(List.of(done, forming), 1_030_000L));
+        assertEquals(java.util.Optional.empty(), Live.forming(List.of(done, forming), 1_060_000L));
+        assertEquals(java.util.Optional.empty(), Live.forming(List.of(done), 1_030_000L));
+    }
 }

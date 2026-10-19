@@ -53,8 +53,8 @@ public final class Main {
             live    Trades the book on paper through today. Warms the averages up on the past week, catches
                     up on the day so far, then after each minute closes prints any entry signal with its
                     share count, stop and target, skips a signal that would put more than --book dollars in
-                    open positions, and prints each stop, target or 15:55 close as it happens, with the
-                    day's running P&L. With --date it runs a past day the same way, all at once.
+                    open positions, and prints each stop, target or 15:55 close within seconds of the
+                    price reaching it, with the day's running P&L. With --date it runs a past day the same way, all at once.
 
             options:
               --session <HH:MM-HH:MM>  daily window of bars the averages run on, Eastern time
@@ -83,7 +83,8 @@ public final class Main {
                             ticker, may be repeated or comma-separated (every ticker needs one)
               --book <dollars>  live: most dollars in open positions at once (default 0: no limit)
               --date <YYYY-MM-DD>  live: run that past day at once instead of today
-              --poll <seconds>  live: seconds between polls while a bar is still missing (default 5)
+              --poll <seconds>  live: seconds between fetches of the day's bars (default 5); stops and
+                            targets are checked against the forming minute on every fetch
               (--shares, --risk, --cap, --cooldown and --window apply to live as to grid)
 
             environment:

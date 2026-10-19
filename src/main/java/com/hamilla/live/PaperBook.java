@@ -206,9 +206,33 @@ public final class PaperBook {
         listener.opened(p, before + p.notional());
     }
 
-    /** Fills stops and targets of {@code symbol}'s open positions on this bar; from 15:54 on, closes the rest at its close. */
+    /**
+     * Checks the minute still forming against {@code symbol}'s open positions: a stop or target its high or
+     * low has already reached is filled now rather than when the minute closes. The bar is not rolled into
+     * the averages and nothing is entered on it; feed it again with {@link #onBar} once it completes. A
+     * forming bar on another day than the trading day, or at or before a position's own bar, does nothing.
+     */
+    public void onFormingBar(String symbol, MinuteBar bar) {
+        if (!engines.containsKey(symbol)) {
+            throw new IllegalArgumentException("no bracket for " + symbol);
+        }
+        ZonedDateTime et = Instant.ofEpochMilli(bar.startMs()).atZone(PriceEvent.EASTERN);
+        if (!et.toLocalDate().equals(tradingDay) || !session.contains(bar.startMs())) {
+            return;
+        }
+        fill(symbol, bar, et.toLocalTime(), false);
+    }
+
     private void fill(String symbol, MinuteBar bar, LocalTime time) {
-        boolean lastBarOfDay = !time.isBefore(BracketSimulator.LAST_ENTRY);
+        fill(symbol, bar, time, true);
+    }
+
+    /**
+     * Fills stops and targets of {@code symbol}'s open positions on this bar. For a completed bar from 15:54
+     * on, the rest is closed at its close; a forming bar never closes anything.
+     */
+    private void fill(String symbol, MinuteBar bar, LocalTime time, boolean completed) {
+        boolean lastBarOfDay = completed && !time.isBefore(BracketSimulator.LAST_ENTRY);
         for (Iterator<Position> it = open.iterator(); it.hasNext(); ) {
             Position p = it.next();
             if (!p.symbol().equals(symbol) || bar.startMs() <= p.barStartMs()) {

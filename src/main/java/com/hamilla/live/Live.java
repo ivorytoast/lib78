@@ -25,10 +25,11 @@ import java.util.Map;
 
 /**
  * Runs a {@link PaperBook} through the trading day. At start it loads a week of bars for every symbol to
- * warm the averages and catches up on the day so far; then, a few seconds after each minute closes, it
- * fetches the day's bars again and rolls the newly completed minute through the book, printing one line
- * for each signal taken, each signal skipped for lack of room, and each position that comes off. For a
- * past day (or once the market has closed) it runs the whole day at once, so a day can be rehearsed.
+ * warm the averages and catches up on the day so far; then every few seconds it fetches the day's bars
+ * again, rolls any newly completed minute through the book and checks the minute still forming against
+ * the open positions, printing one line for each signal taken, each signal skipped for lack of room, and
+ * each position that comes off. For a past day (or once the market has closed) it runs the whole day at
+ * once, so a day can be rehearsed.
  */
 public final class Live {
 
@@ -36,8 +37,6 @@ public final class Live {
     private static final int WARMUP_CALENDAR_DAYS = 7;
     /** Seconds after a minute closes before its bar is asked for; aggregates take a moment to settle. */
     private static final int SETTLE_SECONDS = 2;
-    /** Seconds into a minute after which a still-missing bar is taken as an empty minute until the next poll. */
-    private static final int GIVE_UP_SECONDS = 30;
     private static final LocalTime MARKET_CLOSE = LocalTime.of(16, 0);
     private static final DateTimeFormatter HHMM = DateTimeFormatter.ofPattern("HH:mm");
 
@@ -46,7 +45,7 @@ public final class Live {
      * @param sizing      shares per signal
      * @param bookDollars most dollars in open positions at once; 0 for no limit
      * @param date        the day to run; null means today (Eastern)
-     * @param pollSeconds seconds between polls while a minute's bar is still missing
+     * @param pollSeconds seconds between polls of the day's bars
      */
     public record Options(Map<String, Bracket> brackets, Sizing sizing, double bookDollars, Session session, SignalWindow window,
                           int cooldownMinutes, LocalDate date, int pollSeconds) {
@@ -109,7 +108,7 @@ public final class Live {
             finish(book, "rehearsal complete");
             return book;
         }
-        out.printf("caught up to %s, watching...%n", HHMM.format(ZonedDateTime.now(clock)));
+        out.printf("caught up to %s, watching every %d seconds...%n", HHMM.format(ZonedDateTime.now(clock)), opts.pollSeconds());
 
         while (true) {
             long now = clock.millis();
@@ -122,30 +121,34 @@ public final class Live {
                 finish(book, "window closed and nothing open");
                 return book;
             }
-            long minuteStart = Math.floorDiv(now, Session.MINUTE_MS) * Session.MINUTE_MS;
-            long previousBar = minuteStart - Session.MINUTE_MS;
-            long secondsIn = (now - minuteStart) / 1000;
-            List<String> behind = new ArrayList<>();
             for (String symbol : opts.brackets().keySet()) {
-                if (book.lastBar(symbol).orElse(Long.MIN_VALUE) < previousBar && opts.session().contains(previousBar)) {
-                    behind.add(symbol);
-                }
-            }
-            if (behind.isEmpty() || secondsIn > GIVE_UP_SECONDS || secondsIn < SETTLE_SECONDS) {
-                long next = secondsIn < SETTLE_SECONDS ? minuteStart + SETTLE_SECONDS * 1000L
-                        : minuteStart + Session.MINUTE_MS + SETTLE_SECONDS * 1000L;
-                Thread.sleep(Math.max(250, next - now));
-                continue;
-            }
-            for (String symbol : behind) {
                 try {
-                    book.onBars(symbol, completed(client.minuteBars(symbol, day, day), clock.millis()));
+                    List<MinuteBar> bars = client.minuteBars(symbol, tradingDay, tradingDay);
+                    long fetched = clock.millis();
+                    book.onBars(symbol, completed(bars, fetched));
+                    forming(bars, fetched).ifPresent(bar -> book.onFormingBar(symbol, bar));
                 } catch (IOException e) {
                     out.printf("%s %-5s fetch failed, will retry: %s%n", HHMM.format(ZonedDateTime.now(clock)), symbol, e.getMessage());
                 }
             }
-            Thread.sleep(opts.pollSeconds() * 1000L);
+            // Poll on the interval, but always land one poll just after the minute closes so entries print promptly.
+            long after = clock.millis();
+            long minuteStart = Math.floorDiv(after, Session.MINUTE_MS) * Session.MINUTE_MS;
+            long nextSettle = minuteStart + Session.MINUTE_MS + SETTLE_SECONDS * 1000L;
+            long next = Math.min(after + opts.pollSeconds() * 1000L, nextSettle);
+            Thread.sleep(Math.max(250, next - after));
         }
+    }
+
+    /** The bar of the minute still in progress at {@code nowMs}, if the list has it. */
+    static java.util.Optional<MinuteBar> forming(List<MinuteBar> bars, long nowMs) {
+        for (int i = bars.size() - 1; i >= 0; i--) {
+            MinuteBar b = bars.get(i);
+            if (b.startMs() + Session.MINUTE_MS > nowMs && b.startMs() <= nowMs) {
+                return java.util.Optional.of(b);
+            }
+        }
+        return java.util.Optional.empty();
     }
 
     /** Bars whose minute has fully elapsed by {@code nowMs}; the one still forming is left out. */
