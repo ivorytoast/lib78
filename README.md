@@ -250,6 +250,8 @@ the window has closed and nothing is open, or at 16:00.
 
 `--date YYYY-MM-DD` runs a past day through the same code all at once, which is
 the way to rehearse: the trades it prints are the grid's trades for that day.
+Run after the close, or on a weekend, with no `--date`, it rehearses the most
+recent trading day.
 `--poll` sets how many seconds to wait between fetches while a minute's bar
 has not appeared yet (default 5); a minute with no trade in a ticker is left
 alone after 30 seconds and the next bar carries on.

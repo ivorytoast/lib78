@@ -4,6 +4,7 @@ import com.hamilla.backtest.Sizing;
 import com.hamilla.market.MinuteBar;
 import com.hamilla.market.PriceEvent;
 import com.hamilla.massive.MassiveClient;
+import com.hamilla.replay.TradingCalendar;
 import com.hamilla.sma.Action;
 import com.hamilla.sma.Session;
 import com.hamilla.sma.SignalPrices;
@@ -72,9 +73,19 @@ public final class Live {
 
     public PaperBook run(Options opts) throws IOException, InterruptedException {
         LocalDate day = opts.date() != null ? opts.date() : LocalDate.now(clock);
+        long closeMs = day.atTime(MARKET_CLOSE).atZone(PriceEvent.EASTERN).toInstant().toEpochMilli();
+        if (opts.date() == null && clock.millis() >= closeMs) {
+            // After the close with no day asked for: rehearse the most recent trading day, which may be today.
+            String first = opts.brackets().keySet().iterator().next();
+            LocalDate last = TradingCalendar.previousTradingDay(client, first, day.plusDays(1));
+            if (!last.equals(day)) {
+                out.printf("%s is not a trading day; rehearsing the last one, %s%n", day, last);
+                day = last;
+            }
+        }
         PaperBook book = new PaperBook(opts.brackets(), opts.sizing(), opts.bookDollars(), opts.session(), opts.window(),
                 opts.cooldownMinutes(), day, new Printer());
-        long closeMs = day.atTime(MARKET_CLOSE).atZone(PriceEvent.EASTERN).toInstant().toEpochMilli();
+        closeMs = day.atTime(MARKET_CLOSE).atZone(PriceEvent.EASTERN).toInstant().toEpochMilli();
         boolean liveDay = clock.millis() < closeMs;
 
         out.printf("%s %s: %s, window %s, %s, book %s%n", liveDay ? "live" : "rehearsal", day,
