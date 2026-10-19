@@ -85,7 +85,8 @@ public final class Live {
         }
         PaperBook book = new PaperBook(opts.brackets(), opts.sizing(), opts.bookDollars(), opts.session(), opts.window(),
                 opts.cooldownMinutes(), day, new Printer());
-        closeMs = day.atTime(MARKET_CLOSE).atZone(PriceEvent.EASTERN).toInstant().toEpochMilli();
+        final LocalDate tradingDay = day;
+        closeMs = tradingDay.atTime(MARKET_CLOSE).atZone(PriceEvent.EASTERN).toInstant().toEpochMilli();
         boolean liveDay = clock.millis() < closeMs;
 
         out.printf("%s %s: %s, window %s, %s, book %s%n", liveDay ? "live" : "rehearsal", day,
@@ -99,7 +100,7 @@ public final class Live {
         for (String symbol : opts.brackets().keySet()) {
             List<MinuteBar> bars = client.minuteBars(symbol, day.minusDays(WARMUP_CALENDAR_DAYS), day);
             book.onBars(symbol, completed(bars, clock.millis()));
-            long onDay = bars.stream().filter(b -> sameDay(b.startMs(), day)).count();
+            long onDay = bars.stream().filter(b -> sameDay(b.startMs(), tradingDay)).count();
             if (onDay == 0 && !liveDay) {
                 out.printf("warning: no bars for %s on %s%n", symbol, day);
             }
